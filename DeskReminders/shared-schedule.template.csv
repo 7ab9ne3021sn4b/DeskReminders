@@ -1,0 +1,24 @@
+Days,Time,Colour,Title,Text,Notice,For
+#! name = Guild Schedule
+#! timezone = Europe/Amsterdam
+#! groups = Raid Team 1 | Raid Team 2 | Raid Team 3
+#
+# A shared schedule for a guild or community. Easiest: make one in the app
+# (+ New shared schedule). To make one by hand:
+#  1. Change the name and time zone above. The time zone is your group's "server time";
+#     every member sees the events in their own local time. Examples: Europe/London,
+#     Europe/Amsterdam, America/New_York, UTC.
+#  2. Groups (optional): list your teams after "#! groups =", separated by |.
+#     Members tick their group(s) when they import. Delete the line if you don't need groups.
+#  3. Replace the example rows below with your events (same format as schedule.csv).
+#     Notice = minutes before the event for a heads-up (optional).
+#     For = which group(s) the event is for, separated by |. Empty = everyone.
+#     Members see every event; only theirs and the "everyone" events pop up.
+#  4. Save and share this file. Members import it with
+#     the Import button in Desk Reminders.
+#     To update it later, change the file and share it again.
+#
+Every day,17:00,,Dungeons,Group up in Discord.,15,
+Wed,20:00,,Raid night,Be online and repaired.,30,Raid Team 1
+Thu,20:00,,Raid night,Be online and repaired.,30,Raid Team 2|Raid Team 3
+Sun,19:00,,Community event,Check Discord for details.,60,
