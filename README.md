@@ -16,9 +16,14 @@
   <a href="https://ko-fi.com/7ab9ne3021sn4b"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" height="20"></a>
 </p>
 
-<!-- DEMO: record a short clip, save it as docs/media/demo.gif, then delete this line and the two around the image below.
-<p align="center"><img src="docs/media/demo.gif" width="720" alt="Desk Reminders in action"></p>
--->
+<p align="center">
+  <img src="docs/media/main-window.png" width="760" alt="The main window: your schedules on the left, your week and reminders on the right">
+</p>
+
+<p align="center">
+  <img src="docs/media/popup.png" width="420" alt="A pop-up with a reminder from your own schedule and one from a guild schedule, each in its own colour">
+  <br><sub>One pop-up for everything at the same minute, each schedule in its own colour. Snooze or close it.</sub>
+</p>
 
 ## What it does
 
@@ -69,9 +74,10 @@ Start it with **Start-Reminders.cmd**. A short welcome animation plays, then the
 The first time, Desk Reminders offers a few ready-made templates to start with; pick some or start empty.
 Later, double-click the bell in the tray to open the window again.
 
-<!-- SCREENSHOT: save a screenshot of the main window as docs/media/schedule-window.png, then remove these comment markers.
-<p align="center"><img src="docs/media/schedule-window.png" width="720" alt="The main window"></p>
--->
+<p align="center">
+  <img src="docs/media/add-reminder.png" width="640" alt="The Add reminder window: where to add it, title, text, days, time, notice and who it is for">
+  <br><sub>Add reminder: once or repeating, a notice before it starts, and for guild schedules which group it's for.</sub>
+</p>
 
 The window has two parts:
 
@@ -155,6 +161,11 @@ changed. Don't want a particular guild event? Select it in the list → **Remove
 only (this day, or every time).
 
 A schedule file only contains times and text, so importing one can't run anything on your PC.
+
+<p align="center">
+  <img src="docs/media/choose-groups.png" width="640" alt="After importing a guild schedule, members tick the groups they are in">
+  <br><sub>Members tick their group(s) when they import. Only their events and the ones for everyone pop up.</sub>
+</p>
 
 Guide for organisers and members: **[docs/shared-schedules.md](docs/shared-schedules.md)**
 
