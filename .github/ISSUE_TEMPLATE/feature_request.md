@@ -1,3 +1,4 @@
+---
 name: Feature idea
 about: Suggest something new or better
 labels: enhancement
