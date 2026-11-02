@@ -1,0 +1,13 @@
+# Your personal schedule never goes into the repository
+DeskReminders/schedule.csv
+schedule.csv
+DeskReminders/shared/
+DeskReminders/settings.json
+settings.json
+
+# Release builds
+dist/
+
+# Windows clutter
+Thumbs.db
+desktop.ini
