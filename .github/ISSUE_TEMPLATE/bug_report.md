@@ -1,3 +1,4 @@
+---
 name: Bug report
 about: Something doesn't work as expected
 labels: bug
