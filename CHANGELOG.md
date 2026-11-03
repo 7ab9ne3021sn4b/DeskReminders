@@ -5,6 +5,27 @@ Versions follow [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-03
+
+### Added
+- **Follow a link.** *Import → From a link*: paste a link to a shared schedule (e.g. a GitHub
+  Gist) and it stays up to date by itself: checked every 20 minutes, or right away with
+  *Options → Check now*. When it changes you get a short note of what changed for you.
+- **Calendar links.** Follow a Google Calendar, Outlook or any `.ics` / `webcal://` calendar and
+  get pop-ups for its events (next 4 months, in your local time, with the calendar's reminder as
+  a heads-up). A single `.ics` file can also be imported.
+- **Linked files in a synced folder.** *Import → Linked file in a synced folder* (OneDrive,
+  Google Drive, Dropbox): changes come in within seconds.
+- **Export, three ways:** *Save a copy as a file*, *Keep a copy updated in a folder* (every change
+  you make is copied there automatically), and *Copy for a link (GitHub Gist)*.
+- **A sound per schedule** under *Options* (or the one from Settings).
+- **New version notice**: once a day the app asks GitHub for the latest version number and shows
+  a link at the bottom when there's a new one. Can be turned off.
+
+### Changed
+- Footer: "Free, open source and offline – only connects for updates and links you follow".
+- Settings has two columns, with a new *Updates* section.
+
 ## [1.0.0] - 2026-11-02
 
 First public release.
@@ -42,5 +63,6 @@ First public release.
 - A short animated welcome screen, then the main window opens by itself.
 - Everything stays on your PC: free, open source and offline.
 
-[Unreleased]: https://github.com/7ab9ne3021sn4b/DeskReminders/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/7ab9ne3021sn4b/DeskReminders/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/7ab9ne3021sn4b/DeskReminders/releases/tag/v1.1.0
 [1.0.0]: https://github.com/7ab9ne3021sn4b/DeskReminders/releases/tag/v1.0.0

@@ -65,6 +65,19 @@ Start Desk Reminders with **Start-Reminders.cmd** (not by right-clicking the `.p
 the classic Windows console, which can be hidden; Windows Terminal can't hide its windows.
 A black window may flash for a moment while it starts; that's normal.
 
+### A followed link says "link problem"
+Select the schedule → **Options** to see what went wrong, then **Check now**.
+- *Doesn't contain a schedule or a calendar / looks like a web page*: you pasted the page, not the
+  file. For a GitHub Gist the app fixes this itself; for other sites use the "Raw" or "Download"
+  link. For Google Calendar use the **Secret address in iCal format**, not the normal share link.
+- *Couldn't connect / no answer*: you're offline or the site is down. The last version you have
+  keeps working, and the app tries again every 20 minutes.
+- *403 / 404*: the link is private, was removed, or changed. Ask the organiser for the new link.
+
+### A linked file in a synced folder doesn't update
+Check that the sync app (OneDrive, Google Drive, Dropbox) is running and the file is downloaded
+on this PC. The card shows *link problem* if the file is missing.
+
 ### Pop-ups appear on the wrong screen or corner
 **Settings → Pop-ups**: pick the corner and screen, click **Test**, then **Save**.
 

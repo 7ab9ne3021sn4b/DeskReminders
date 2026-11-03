@@ -4,9 +4,11 @@ A shared schedule is a schedule file for a group: a guild, a team, a Discord com
 One person writes it, everyone imports it. It runs **next to** each member's own reminders and
 never changes their `schedule.csv`.
 
-Everything stays offline: you share the file however you like (Discord, email, a USB stick),
-and Desk Reminders never downloads anything itself. A schedule file only holds times and text,
-so importing one can't run anything on a PC.
+You can share it three ways: as a **link** that stays up to date (a free GitHub Gist), as a
+**file in a synced folder** (OneDrive, Google Drive, Dropbox) that stays up to date, or as a
+**plain file** you post in Discord. A schedule file only holds times and text, so importing one
+can't run anything on a PC. Members can also follow a **calendar** (Google Calendar, Outlook,
+any `.ics` link) directly.
 
 ## For organisers: make the schedule
 
@@ -27,11 +29,51 @@ so importing one can't run anything on a PC.
 5. Events from your schedule show in your own main window with *(yours)* in the **Schedule**
    column. **Edit** and **Remove** work on them like on your own reminders.
    *Remove → Only this day* cancels that one date for everyone (after you share again).
-6. Click **Export** (top of the **Schedules** list) → save the file (for example
-   on your Desktop). Explorer opens with the file selected, ready to drag into Discord.
+6. Click **Export** (top of the **Schedules** list) and pick how to share it (see below).
 
-To change the schedule later: edit it in the app, then **Export** again and post the new file.
-The file carries the date you last changed it, so members can see which version they have.
+### Share it so it stays up to date
+
+**Option A: a link (GitHub Gist, free), best for a whole guild**
+
+1. **Export → Copy for a link (GitHub Gist)**. The schedule is copied and gist.github.com opens
+   (log in or make a free GitHub account).
+2. File name: e.g. `Guild Schedule.csv`. Paste into the big box, click **Create secret gist**.
+   *Secret* means it isn't listed publicly; only people with the link can open it.
+3. Copy the page's link and post it in Discord. Members: **Import → From a link** → paste.
+4. **After a change:** Export → Copy for a link again, open your gist, **Edit**, select all,
+   paste, **Update**. Members get it within 20 minutes and see what changed for them.
+
+**Option B: a synced folder (OneDrive, Google Drive, Dropbox), best for a small team**
+
+1. **Export → Keep a copy updated in a folder** and pick a folder that's synced and shared with
+   your members.
+2. Members: **Import → Linked file in a synced folder** and pick the file in their copy of that
+   folder.
+3. From then on every change you make is copied there automatically, and members get it within
+   seconds of their sync app downloading it. You don't have to do anything.
+
+**Option C: a plain file**
+
+**Export → Save a copy as a file** saves it (e.g. on your Desktop) and opens Explorer, ready to
+drag into Discord. After a change, export and post it again; members import it again. The file
+carries the date you last changed it, so members can see which version they have.
+
+### Already have a calendar?
+
+If your guild already keeps its events in Google Calendar, Outlook or another calendar app,
+members can follow that calendar directly, with no schedule file needed:
+
+- **Google Calendar:** Settings → pick the calendar → *Integrate calendar* → **Secret address in
+  iCal format** (or *Public address in iCal format* for a public calendar).
+- **Outlook.com / Microsoft 365:** Settings → Calendar → Shared calendars → *Publish a calendar*
+  → **ICS** link.
+- **Others** (Apple iCloud public calendars, Teamup, Discord bots that export iCal): any link
+  ending in `.ics` or starting with `webcal://`.
+
+Members: **Import → From a link** → paste it. Events for the next 4 months show up in each
+member's local time, with a heads-up if the calendar event has a reminder. All-day events are
+left out. Calendars don't have groups, so everyone gets every event (members can still mute
+single events with the bell).
 
 To change the groups later: select the schedule on the left → **Options** → *Groups*.
 As the organiser you get every group's pop-ups by default; untick groups under *My groups*
@@ -73,7 +115,13 @@ Summer and winter time are handled automatically.
 
 ## For members: use it
 
-- **Import:** click **Import** (top of the **Schedules** list in the main window) → pick the file.
+- **Import:** click **Import** (top of the **Schedules** list in the main window):
+  - **From a link** for a Gist or calendar link: it's checked every 20 minutes. The card shows
+    *Link* or *Calendar link*; **Options → Check now** checks right away.
+  - **Linked file in a synced folder** for a file in OneDrive / Google Drive / Dropbox: changes
+    come in within seconds.
+  - **From a file** for a file posted in Discord: a one-time copy.
+
   The app checks every row first and tells you if anything is wrong.
 - **Pick your group(s):** if the schedule has groups, tick the ones you're in. You see every
   event; events for other groups are greyed out with *(not you)* and don't pop up. Events for
@@ -86,9 +134,12 @@ Summer and winter time are handled automatically.
 - **Colour and quiet hours:** select the schedule → **Options** sets the schedule's colour and
   whether it may pop up during your quiet hours (on by default for shared schedules, so you
   don't miss a raid; set quiet hours in **Settings**).
-- **Update:** import the newer file. The app shows which version you have and which one you're
-  importing, replaces only that schedule, and tells you what changed for you (new events for you
-  and for other groups). Your groups, mutes and notify-me-toos stay.
+- **Update:** links and synced files update by themselves; a short message tells you what changed
+  for you (new events for you and for other groups). For a plain file, import the newer one; the
+  app shows which version you have and which one you're importing. Your groups, mutes and
+  notify-me-toos always stay.
+- **Stop following a link:** select it → **Options** → *Stop following*. You keep the last version
+  as a normal copy.
 - **Turn it off for a while:** untick its checkbox in the **Schedules** list.
 - **Skip one event:** select it in the main window → **Remove** → *Only this day* or
   *Every time*. This only hides it for you. Select the schedule → **Options** → *Show the hidden events again* brings

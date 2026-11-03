@@ -10,7 +10,7 @@
 
 param([string]$ListFor, [switch]$InstallStartup, [switch]$RemoveStartup)
 
-$AppVersion   = '1.0.0'
+$AppVersion   = '1.1.0'
 $ScheduleFile = Join-Path $PSScriptRoot 'schedule.csv'
 $TemplateFile = Join-Path $PSScriptRoot 'schedule.template.csv'
 $SharedDir    = Join-Path $PSScriptRoot 'shared'
@@ -356,6 +356,7 @@ function Load-Settings {
         Sound = 'Soft chime.wav'; SoundOn = $true; Volume = 40; MineName = ''; Disabled = @(); Hidden = @(); Alerts = @(); Owned = @()
         Colors = @{}; MyGroups = @{}; QuietAllow = @{}; Quiet = @{ On = $false; From = '23:00'; To = '08:00' }
         Corner = 'BottomRight'; Monitor = 0; Welcomed = $false; ShowWelcome = $true; HidePast = $true; ViewOff = @()
+        Links = @{}; Publish = @{}; Sounds = @{}; Theme = 'System'; CheckUpdates = $true; UpdateChecked = ''; LatestSeen = ''
     }
     if (Test-Path -LiteralPath $SettingsFile) {
         try {
@@ -378,6 +379,13 @@ function Load-Settings {
             if ($null -ne $j.Welcomed) { $s.Welcomed = [bool]$j.Welcomed }
             if ($null -ne $j.ShowWelcome) { $s.ShowWelcome = [bool]$j.ShowWelcome }
             if ($null -ne $j.HidePast) { $s.HidePast = [bool]$j.HidePast }
+            if ($j.Links) { $lk = ConvertTo-Hash $j.Links; foreach ($k in @($lk.Keys)) { $s.Links[$k] = ConvertTo-Hash $lk[$k] } }
+            if ($j.Publish) { $s.Publish = ConvertTo-Hash $j.Publish }
+            if ($j.Sounds) { $s.Sounds = ConvertTo-Hash $j.Sounds }
+            if ($j.Theme -in @('Light', 'Dark', 'System')) { $s.Theme = [string]$j.Theme }
+            if ($null -ne $j.CheckUpdates) { $s.CheckUpdates = [bool]$j.CheckUpdates }
+            if ($j.UpdateChecked) { $s.UpdateChecked = [string]$j.UpdateChecked }
+            if ($j.LatestSeen) { $s.LatestSeen = [string]$j.LatestSeen }
         } catch {}
     }
     return $s
@@ -405,6 +413,13 @@ function Save-Settings {
         Welcomed   = [bool]$st.Welcomed
         ShowWelcome = [bool]$st.ShowWelcome
         HidePast   = [bool]$st.HidePast
+        Links      = $st.Links
+        Publish    = $st.Publish
+        Sounds     = $st.Sounds
+        Theme      = [string]$st.Theme
+        CheckUpdates = [bool]$st.CheckUpdates
+        UpdateChecked = [string]$st.UpdateChecked
+        LatestSeen = [string]$st.LatestSeen
     }
     try { ($o | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $SettingsFile -Encoding UTF8 } catch {}
 }
@@ -513,9 +528,42 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 # A window that shows on top without taking focus from the game or app you're in
-Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition @"
+Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @"
 using System.Windows.Forms;
+using System.Drawing;
+// Menu colours for dark mode
+public class DarkMenuColors : ProfessionalColorTable {
+    static Color Bg = Color.FromArgb(43, 45, 49), Sel = Color.FromArgb(58, 68, 88), Line = Color.FromArgb(70, 72, 78), Bar = Color.FromArgb(32, 33, 36);
+    public override Color MenuItemSelected { get { return Sel; } }
+    public override Color MenuItemSelectedGradientBegin { get { return Sel; } }
+    public override Color MenuItemSelectedGradientEnd { get { return Sel; } }
+    public override Color MenuItemPressedGradientBegin { get { return Sel; } }
+    public override Color MenuItemPressedGradientMiddle { get { return Sel; } }
+    public override Color MenuItemPressedGradientEnd { get { return Sel; } }
+    public override Color MenuItemBorder { get { return Sel; } }
+    public override Color MenuBorder { get { return Line; } }
+    public override Color MenuStripGradientBegin { get { return Bar; } }
+    public override Color MenuStripGradientEnd { get { return Bar; } }
+    public override Color ToolStripDropDownBackground { get { return Bg; } }
+    public override Color ImageMarginGradientBegin { get { return Bg; } }
+    public override Color ImageMarginGradientMiddle { get { return Bg; } }
+    public override Color ImageMarginGradientEnd { get { return Bg; } }
+    public override Color SeparatorDark { get { return Line; } }
+    public override Color SeparatorLight { get { return Line; } }
+    public override Color ToolStripBorder { get { return Line; } }
+}
 public class QuietForm : Form {
+    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+    static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref int value, int size);
+    [System.Runtime.InteropServices.DllImport("uxtheme.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern int SetWindowTheme(System.IntPtr hwnd, string app, string idList);
+    // Dark title bar (Windows 10 2004+ / 11)
+    public static void DarkTitle(System.IntPtr h) {
+        int on = 1;
+        if (DwmSetWindowAttribute(h, 20, ref on, 4) != 0) { DwmSetWindowAttribute(h, 19, ref on, 4); }
+    }
+    // Dark scrollbars in lists
+    public static void DarkScroll(System.IntPtr h) { SetWindowTheme(h, "DarkMode_Explorer", null); }
     [System.Runtime.InteropServices.DllImport("shell32.dll")]
     public static extern int SetCurrentProcessExplicitAppUserModelID([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string appId);
     [System.Runtime.InteropServices.DllImport("kernel32.dll")]
@@ -629,6 +677,147 @@ function Get-MineName {
 function Get-Tint($color, [double]$k) {
     [System.Drawing.Color]::FromArgb([int]($color.R + (255 - $color.R) * $k), [int]($color.G + (255 - $color.G) * $k), [int]($color.B + (255 - $color.B) * $k))
 }
+
+# --- Light / dark mode -----------------------------------------------------------
+function New-Rgb([int]$r, [int]$g, [int]$b) { [System.Drawing.Color]::FromArgb($r, $g, $b) }
+
+function Test-DarkTheme {
+    return $false      # Desk Reminders always uses its light look
+}
+
+# Colours used by the windows (light = the classic look)
+function Set-Palette {
+    $script:Dark = Test-DarkTheme
+    if ($script:Dark) {
+        $script:P = @{
+            Back = New-Rgb 32 33 36; Surface = New-Rgb 43 45 49; Raised = New-Rgb 54 57 63
+            Text = New-Rgb 232 233 235; Dim = New-Rgb 170 173 180; Faint = New-Rgb 140 143 150
+            Grey = New-Rgb 105 108 115; OtherMonth = New-Rgb 95 98 105; DayText = New-Rgb 232 233 235
+            Border = New-Rgb 88 91 98; Divider = New-Rgb 70 72 78; Footer = New-Rgb 24 25 28
+            Hover = New-Rgb 58 68 88; Track = New-Rgb 70 72 78; Error = New-Rgb 240 120 120
+        }
+    } else {
+        $script:P = @{
+            Back = [System.Drawing.SystemColors]::Control; Surface = [System.Drawing.Color]::White; Raised = [System.Drawing.SystemColors]::Control
+            Text = [System.Drawing.SystemColors]::ControlText; Dim = [System.Drawing.Color]::DimGray; Faint = [System.Drawing.Color]::Gray
+            Grey = New-Rgb 160 160 160; OtherMonth = New-Rgb 185 185 185; DayText = New-Rgb 30 30 30
+            Border = [System.Drawing.SystemColors]::ControlText; Divider = [System.Drawing.Color]::Gainsboro; Footer = New-Rgb 243 245 248
+            Hover = New-Rgb 228 236 247; Track = New-Rgb 226 232 240; Error = [System.Drawing.Color]::Firebrick
+        }
+    }
+}
+
+# A schedule colour as text: lighter in dark mode so it stays readable
+function To-TextColor($c) {
+    if ($script:Dark) { return Get-Tint $c 0.45 }
+    return $c
+}
+
+# A soft background version of a colour (towards white, or towards the dark surface)
+function Get-Soft($c, [double]$k) {
+    if (-not $script:Dark) { return Get-Tint $c $k }
+    $s = $script:P.Surface
+    [System.Drawing.Color]::FromArgb([int]($c.R + ($s.R - $c.R) * $k), [int]($c.G + ($s.G - $c.G) * $k), [int]($c.B + ($s.B - $c.B) * $k))
+}
+
+function Test-SameColor($a, $b) { return ($a.ToArgb() -eq $b.ToArgb()) }
+
+function Reset-MenuTheme($menu) {
+    $menu.RenderMode = 'ManagerRenderMode'
+    $menu.BackColor = [System.Drawing.SystemColors]::Control
+    $menu.ForeColor = [System.Drawing.SystemColors]::ControlText
+    foreach ($i in $menu.Items) { if (-not ($i.Font.Bold)) { $i.ForeColor = [System.Drawing.SystemColors]::ControlText } else { $i.ForeColor = [System.Drawing.SystemColors]::ControlText } }
+}
+
+function Set-MenuTheme($menu) {
+    if (-not $script:Dark) { return }
+    $menu.Renderer = New-Object System.Windows.Forms.ToolStripProfessionalRenderer((New-Object DarkMenuColors))
+    $menu.BackColor = $script:P.Back
+    $menu.ForeColor = $script:P.Text
+    $stack = New-Object System.Collections.Stack
+    foreach ($i in $menu.Items) { $stack.Push($i) }
+    while ($stack.Count -gt 0) {
+        $i = $stack.Pop()
+        if (Test-SameColor $i.ForeColor ([System.Drawing.SystemColors]::ControlText)) { $i.ForeColor = $script:P.Text }
+        if ($i -is [System.Windows.Forms.ToolStripMenuItem]) {
+            $i.DropDown.BackColor = $script:P.Surface
+            foreach ($j in $i.DropDownItems) { $stack.Push($j) }
+        }
+    }
+}
+
+# Dark list header (the rows themselves draw normally)
+function Set-ListViewDark($lv) {
+    $lv.OwnerDraw = $true
+    $lv.Add_DrawColumnHeader({
+        param($s, $e)
+        $b = New-Object System.Drawing.SolidBrush($script:P.Raised)
+        $e.Graphics.FillRectangle($b, $e.Bounds); $b.Dispose()
+        $pen = New-Object System.Drawing.Pen($script:P.Divider)
+        $e.Graphics.DrawLine($pen, $e.Bounds.Right - 1, $e.Bounds.Top + 4, $e.Bounds.Right - 1, $e.Bounds.Bottom - 4)
+        $e.Graphics.DrawLine($pen, $e.Bounds.Left, $e.Bounds.Bottom - 1, $e.Bounds.Right, $e.Bounds.Bottom - 1); $pen.Dispose()
+        $r = New-Object System.Drawing.Rectangle(($e.Bounds.X + 6), $e.Bounds.Y, ($e.Bounds.Width - 8), $e.Bounds.Height)
+        [System.Windows.Forms.TextRenderer]::DrawText($e.Graphics, $e.Header.Text, $s.Font, $r, $script:P.Text, [System.Windows.Forms.TextFormatFlags]'VerticalCenter, Left, EndEllipsis')
+    })
+    $lv.Add_DrawItem({ $_.DrawDefault = $true })
+    $lv.Add_DrawSubItem({ $_.DrawDefault = $true })
+}
+
+# Recolours a window and everything in it for dark mode (light mode is left as it is)
+function Set-Theme($root) {
+    if (-not $script:Dark -or -not $root) { return }
+    $P = $script:P
+    $white = [System.Drawing.Color]::White
+    $ctrl = [System.Drawing.SystemColors]::Control
+    $ctrlText = [System.Drawing.SystemColors]::ControlText
+    $lightFooter = New-Rgb 243 245 248
+    $stack = New-Object System.Collections.Stack
+    $stack.Push($root)
+    while ($stack.Count -gt 0) {
+        $c = $stack.Pop()
+        foreach ($k in $c.Controls) { $stack.Push($k) }
+        if ($c -is [System.Windows.Forms.Form]) {
+            $c.BackColor = $P.Back; $c.ForeColor = $P.Text
+            try { [void][QuietForm]::DarkTitle($c.Handle) } catch {}
+            continue
+        }
+        if ($c -is [System.Windows.Forms.MenuStrip]) { Set-MenuTheme $c; continue }
+        if ($c -is [System.Windows.Forms.DateTimePicker]) { continue }   # Windows draws it itself
+        # Backgrounds
+        if (Test-SameColor $c.BackColor $white) { $c.BackColor = $P.Surface }
+        elseif (Test-SameColor $c.BackColor $lightFooter) { $c.BackColor = $P.Footer }
+        # Text
+        $fc = $c.ForeColor
+        if ((Test-SameColor $fc $ctrlText) -or (Test-SameColor $fc ([System.Drawing.Color]::Black))) { $c.ForeColor = $P.Text }
+        elseif (Test-SameColor $fc ([System.Drawing.Color]::DimGray)) { $c.ForeColor = $P.Dim }
+        elseif (Test-SameColor $fc ([System.Drawing.Color]::Gray)) { $c.ForeColor = $P.Faint }
+        elseif (Test-SameColor $fc $Accent) { $c.ForeColor = To-TextColor $Accent }
+        elseif (Test-SameColor $fc ([System.Drawing.Color]::Firebrick)) { $c.ForeColor = $P.Error }
+        if ($c -is [System.Windows.Forms.Button]) {
+            if ((Test-SameColor $c.BackColor $ctrl) -or (Test-SameColor $c.BackColor $P.Back)) {
+                $c.FlatStyle = 'Flat'
+                $c.BackColor = $P.Raised
+                $c.FlatAppearance.BorderColor = $P.Border
+                $c.FlatAppearance.MouseOverBackColor = $P.Hover
+            }
+            if (Test-SameColor $c.BackColor $P.Surface) { $c.FlatAppearance.MouseOverBackColor = $P.Hover }
+        }
+        elseif ($c -is [System.Windows.Forms.TextBox] -or $c -is [System.Windows.Forms.ComboBox] -or $c -is [System.Windows.Forms.NumericUpDown] -or
+                $c -is [System.Windows.Forms.ListBox] -or $c -is [System.Windows.Forms.ListView]) {
+            $c.BackColor = $P.Surface; $c.ForeColor = $P.Text
+            if ($c -is [System.Windows.Forms.ComboBox]) { $c.FlatStyle = 'Flat' }
+            if ($c -is [System.Windows.Forms.TextBox]) { $c.BorderStyle = 'FixedSingle' }
+            if ($c -is [System.Windows.Forms.ListView] -and -not $c.OwnerDraw) { Set-ListViewDark $c }
+            try { [void][QuietForm]::DarkScroll($c.Handle) } catch {}
+        }
+        elseif ($c -is [System.Windows.Forms.ScrollableControl] -and $c.AutoScroll) {
+            try { [void][QuietForm]::DarkScroll($c.Handle) } catch {}
+        }
+        elseif ($c -is [System.Windows.Forms.TrackBar]) { $c.BackColor = $c.Parent.BackColor }
+    }
+}
+
+Set-Palette
 
 function Open-Url([string]$url) { try { Start-Process $url } catch {} }
 
@@ -959,7 +1148,14 @@ function Show-Reminder($items) {
 
     $script:current = $form
     $form.Show()
-    Play-Chime
+    Play-Chime -Sound (Get-ScheduleSound $items[0])
+}
+
+# The sound for a reminder: its schedule's own sound, or the one from Settings
+function Get-ScheduleSound($item) {
+    $key = if ($item.IsMine) { 'schedule.csv' } elseif ($item.File) { [System.IO.Path]::GetFileName([string]$item.File) } else { '' }
+    if ($key -and $script:settings.Sounds.ContainsKey($key) -and $script:settings.Sounds[$key]) { return [string]$script:settings.Sounds[$key] }
+    return ''
 }
 
 # Uses the colours you picked: yours, and your first shared schedule's (or green)
@@ -1123,6 +1319,7 @@ function Update-ScheduleFile($src, [scriptblock]$change, [string]$what = 'change
     if ($src.Owned) { Set-Directive $fileLines 'updated' (Get-Date).ToString('yyyy-MM-dd HH:mm') }
     [System.IO.File]::WriteAllLines($src.File, $fileLines.ToArray(), (New-Object System.Text.UTF8Encoding($true)))
     $script:undo = @{ Kind = 'file'; File = $src.File; Lines = $before; What = $what }
+    Publish-Copies $src.FileName
     Sync-Schedule -Force
     return $true
 }
@@ -1132,6 +1329,7 @@ function Invoke-Undo {
     if (-not $u) { Show-Msg $script:sw 'There is nothing to undo.' 'Undo' | Out-Null; return }
     if ($u.Kind -eq 'file') {
         [System.IO.File]::WriteAllLines($u.File, [string[]]$u.Lines, (New-Object System.Text.UTF8Encoding($true)))
+        Publish-Copies ([System.IO.Path]::GetFileName($u.File))
     } elseif ($u.Kind -eq 'hidden') {
         $script:settings.Hidden = @($u.Hidden)
         Save-Settings
@@ -1178,6 +1376,7 @@ function New-Dialog([string]$title, [int]$w, [int]$h) {
 }
 
 function Show-Dialog($d, $owner) {
+    Set-Theme $d
     if ($owner -and -not $owner.IsDisposed) { return $d.ShowDialog($owner) }
     $d.StartPosition = 'CenterScreen'
     return $d.ShowDialog()
@@ -1549,7 +1748,7 @@ function Clear-ScheduleSettings([string]$fileName) {
     $st.Disabled = @($st.Disabled | Where-Object { $_ -ne $fileName })
     $st.Owned    = @($st.Owned | Where-Object { $_ -ne $fileName })
     $st.ViewOff  = @($st.ViewOff | Where-Object { $_ -ne $fileName })
-    foreach ($h in @($st.Colors, $st.MyGroups, $st.QuietAllow)) { if ($h.ContainsKey($fileName)) { $h.Remove($fileName) } }
+    foreach ($h in @($st.Colors, $st.MyGroups, $st.QuietAllow, $st.Links, $st.Publish, $st.Sounds)) { if ($h.ContainsKey($fileName)) { $h.Remove($fileName) } }
 }
 
 function Get-CleanGroups([string]$text) {
@@ -1563,11 +1762,21 @@ function Get-CleanGroups([string]$text) {
 
 function Import-SharedSchedule($owner) {
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Title = 'Import a shared schedule'
-    $dlg.Filter = 'Schedule files (*.csv)|*.csv|All files (*.*)|*.*'
+    $dlg.Title = 'Import a shared schedule or a calendar'
+    $dlg.Filter = 'Schedules and calendars (*.csv;*.ics)|*.csv;*.ics|All files (*.*)|*.*'
     $res = if ($owner) { $dlg.ShowDialog($owner) } else { $dlg.ShowDialog() }
     if ($res -ne [System.Windows.Forms.DialogResult]::OK) { return }
     $path = $dlg.FileName
+    # A calendar file (.ics): turn it into a schedule first
+    $icsTmp = $null
+    $head = ''
+    try { $head = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8) } catch {}
+    if ($head -match 'BEGIN:VCALENDAR') {
+        $content = Read-LinkContent $head ([IO.Path]::GetFileNameWithoutExtension($path))
+        $icsTmp = Join-Path ([IO.Path]::GetTempPath()) ((Get-SafeName $content.Name) + '.csv')
+        [IO.File]::WriteAllLines($icsTmp, [string[]]$content.Lines.ToArray(), (New-Object Text.UTF8Encoding($true)))
+        $path = $icsTmp
+    }
 
     $r = Read-ScheduleFile $path
     $good = @($r.Rows | Where-Object { $_.Colour -ne 'skip' }).Count
@@ -1744,6 +1953,664 @@ function Share-Schedule($src, $owner) {
     Start-Process explorer.exe -ArgumentList "/select,`"$($dlg.FileName)`""
 }
 
+# --- Links: follow a schedule or calendar online, or a file in a synced folder ---
+# Only downloads; nothing about you is sent. Checked every $LinkMinutes minutes.
+$LinkMinutes = 20
+
+# Turns the link people paste into the address of the file itself
+function ConvertTo-LinkUrl([string]$u) {
+    $u = $u.Trim().Trim('"').Trim("'")
+    if ($u -match '^webcals?://') { $u = $u -replace '^webcals?://', 'https://' }
+    if ($u -match '^http://') { $u = $u -replace '^http://', 'https://' }
+    if ($u -notmatch '^https://') { return $null }
+    # GitHub Gist page -> raw (always the newest version)
+    if ($u -match '^https://gist\.github\.com/([^/]+)/([0-9a-fA-F]+)/?$') { return "https://gist.githubusercontent.com/$($Matches[1])/$($Matches[2])/raw" }
+    if ($u -match '^https://gist\.github\.com/([0-9a-fA-F]+)/?$') { return "https://gist.githubusercontent.com/anonymous/$($Matches[1])/raw" }
+    # A file shown on github.com -> raw
+    if ($u -match '^https://github\.com/([^/]+)/([^/]+)/blob/(.+)$') { return "https://raw.githubusercontent.com/$($Matches[1])/$($Matches[2])/$($Matches[3])" }
+    # Dropbox share link -> direct download
+    if ($u -match '^https://(www\.)?dropbox\.com/' ) { return ($u -replace '([?&])dl=0', '$1dl=1') + $(if ($u -notmatch '[?&]dl=') { $(if ($u.Contains('?')) { '&dl=1' } else { '?dl=1' }) } else { '' }) }
+    # Google Drive file page -> direct download
+    if ($u -match '^https://drive\.google\.com/file/d/([^/]+)') { return "https://drive.google.com/uc?export=download&id=$($Matches[1])" }
+    # Pastebin page -> raw
+    if ($u -match '^https://pastebin\.com/([A-Za-z0-9]+)/?$') { return "https://pastebin.com/raw/$($Matches[1])" }
+    return $u
+}
+
+# Downloads a link (also run in the background). HTTPS only, max 2 MB, 15 s timeout.
+$LinkFetch = {
+    param([string]$url)
+    try {
+        try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
+        $req = [Net.HttpWebRequest]::Create($url)
+        $req.UserAgent = 'DeskReminders'
+        $req.Accept = 'text/calendar, text/csv, text/plain, application/json, */*'
+        $req.Timeout = 15000
+        $req.ReadWriteTimeout = 15000
+        $req.AllowAutoRedirect = $true
+        $req.AutomaticDecompression = [Net.DecompressionMethods]::GZip -bor [Net.DecompressionMethods]::Deflate
+        $resp = $req.GetResponse()
+        try {
+            if ($resp.ResponseUri.Scheme -ne 'https') { throw 'The link redirected to an unsafe (http) address.' }
+            $in = $resp.GetResponseStream()
+            $ms = New-Object IO.MemoryStream
+            $buf = New-Object byte[] 65536
+            while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+                $ms.Write($buf, 0, $n)
+                if ($ms.Length -gt 2MB) { throw 'The file is bigger than 2 MB.' }
+            }
+            $bytes = $ms.ToArray()
+        } finally { $resp.Close() }
+        $text = [Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF)
+        return @{ Ok = $true; Text = $text }
+    } catch {
+        $m = $_.Exception.Message
+        if ($_.Exception.InnerException) { $m = $_.Exception.InnerException.Message }
+        return @{ Ok = $false; Error = ($m -replace '^Exception calling "GetResponse" with "0" argument\(s\): ', '').Trim('"') }
+    }
+}
+
+# --- Calendar (.ics) -> schedule rows --------------------------------------------
+function ConvertFrom-IcsText([string]$v) {
+    ($v -replace '\\[nN]', ' ' -replace '\\,', ',' -replace '\\;', ';' -replace '\\\\', '\').Trim()
+}
+
+# Returns @{ Utc = <datetime UTC>; AllDay = bool } or $null
+function ConvertFrom-IcsDate([string]$value, [hashtable]$params) {
+    $v = $value.Trim()
+    $ci = [Globalization.CultureInfo]::InvariantCulture
+    if ($v -match '^\d{8}$' -or $params['VALUE'] -eq 'DATE') {
+        $d = [datetime]::MinValue
+        if ([datetime]::TryParseExact($v.Substring(0, 8), 'yyyyMMdd', $ci, [Globalization.DateTimeStyles]::None, [ref]$d)) { return @{ Utc = $d; AllDay = $true; Wall = $d; Tz = $null } }
+        return $null
+    }
+    $isUtc = $v.EndsWith('Z')
+    $core = $v.TrimEnd('Z')
+    $d = [datetime]::MinValue
+    if (-not [datetime]::TryParseExact($core, [string[]]@("yyyyMMdd'T'HHmmss", "yyyyMMdd'T'HHmm"), $ci, [Globalization.DateTimeStyles]::None, [ref]$d)) { return $null }
+    if ($isUtc) { return @{ Utc = $d; AllDay = $false; Wall = $d; Tz = [TimeZoneInfo]::Utc } }
+    $tz = $null
+    if ($params['TZID']) { $tz = Resolve-TimeZone ($params['TZID'] -replace '^/', '') }
+    if (-not $tz) { $tz = [TimeZoneInfo]::Local }
+    try { $u = [TimeZoneInfo]::ConvertTimeToUtc([datetime]::SpecifyKind($d, 'Unspecified'), $tz) } catch { $u = $d }
+    return @{ Utc = $u; AllDay = $false; Wall = $d; Tz = $tz }
+}
+
+function ConvertTo-UtcWall([datetime]$wall, $tz) {
+    try { return [TimeZoneInfo]::ConvertTimeToUtc([datetime]::SpecifyKind($wall, 'Unspecified'), $tz) } catch { return $null }
+}
+
+# Expands a recurring event (in its own time zone, so summer/winter time stays right)
+function Get-IcsOccurrences($start, [hashtable]$rule, [datetime]$fromUtc, [datetime]$toUtc) {
+    $out = New-Object System.Collections.Generic.List[datetime]
+    $freq = $rule['FREQ']
+    $interval = if ($rule['INTERVAL']) { [math]::Max(1, [int]$rule['INTERVAL']) } else { 1 }
+    $count = if ($rule['COUNT']) { [int]$rule['COUNT'] } else { [int]::MaxValue }
+    $until = $null
+    if ($rule['UNTIL']) { $u = ConvertFrom-IcsDate $rule['UNTIL'] @{}; if ($u) { $until = if ($u.AllDay) { $u.Utc.AddDays(1) } else { $u.Utc } } }
+    $wall = $start.Wall; $tz = $start.Tz
+    $tod = $wall.TimeOfDay
+    $dayCodes = @{ MO = 1; TU = 2; WE = 3; TH = 4; FR = 5; SA = 6; SU = 7 }
+    $byDay = @(); if ($rule['BYDAY']) { $byDay = @($rule['BYDAY'] -split ',') }
+    $byMonthDay = @(); if ($rule['BYMONTHDAY']) { $byMonthDay = @($rule['BYMONTHDAY'] -split ',' | ForEach-Object { [int]$_ }) }
+    $n = 0; $guard = 0
+    $emit = {
+        param([datetime]$w)
+        if ($w -lt $wall) { return $true }
+        $script:icsN++
+        if ($script:icsN -gt $count) { return $false }
+        $utc = ConvertTo-UtcWall $w $tz
+        if ($null -eq $utc) { return $true }
+        if ($until -and $utc -gt $until) { return $false }
+        if ($utc -gt $toUtc) { return $false }
+        if ($utc -ge $fromUtc) { $out.Add($utc) }
+        return $true
+    }
+    $script:icsN = 0
+    switch ($freq) {
+        'DAILY' {
+            for ($i = 0; $guard -lt 5000; $i += $interval) { $guard++; if (-not (& $emit $wall.AddDays($i))) { break } }
+        }
+        'WEEKLY' {
+            $dow = [int]$wall.DayOfWeek; if ($dow -eq 0) { $dow = 7 }
+            $weekStart = $wall.Date.AddDays(1 - $dow)
+            $days = if ($byDay.Count -gt 0) { @($byDay | ForEach-Object { $dayCodes[($_ -replace '^[+-]?\d+', '')] } | Where-Object { $_ } | Sort-Object) } else { @($dow) }
+            $go = $true
+            for ($w = 0; $go -and $guard -lt 5000; $w += $interval) {
+                foreach ($dd in $days) { $guard++; if (-not (& $emit ($weekStart.AddDays($w * 7 + $dd - 1) + $tod))) { $go = $false; break } }
+            }
+        }
+        'MONTHLY' {
+            $go = $true
+            for ($m = 0; $go -and $guard -lt 5000; $m += $interval) {
+                $first = (New-Object DateTime($wall.Year, $wall.Month, 1)).AddMonths($m)
+                $dim = [DateTime]::DaysInMonth($first.Year, $first.Month)
+                $dates = @()
+                if ($byMonthDay.Count -gt 0) {
+                    foreach ($md in $byMonthDay) { $d = if ($md -lt 0) { $dim + $md + 1 } else { $md }; if ($d -ge 1 -and $d -le $dim) { $dates += $first.AddDays($d - 1) } }
+                } elseif ($byDay.Count -gt 0) {
+                    foreach ($bd in $byDay) {
+                        if ($bd -notmatch '^([+-]?\d+)?([A-Z]{2})$') { continue }
+                        $want = $dayCodes[$Matches[2]]; if (-not $want) { continue }
+                        $ord = if ($Matches[1]) { [int]$Matches[1] } else { 0 }
+                        $all = @(); for ($d = 0; $d -lt $dim; $d++) { $x = $first.AddDays($d); $xd = [int]$x.DayOfWeek; if ($xd -eq 0) { $xd = 7 }; if ($xd -eq $want) { $all += $x } }
+                        if ($ord -eq 0) { $dates += $all } elseif ($ord -gt 0 -and $ord -le $all.Count) { $dates += $all[$ord - 1] } elseif ($ord -lt 0 -and -$ord -le $all.Count) { $dates += $all[$all.Count + $ord] }
+                    }
+                } elseif ($wall.Day -le $dim) { $dates += $first.AddDays($wall.Day - 1) }
+                foreach ($d in ($dates | Sort-Object)) { $guard++; if (-not (& $emit ($d.Date + $tod))) { $go = $false; break } }
+            }
+        }
+        'YEARLY' {
+            for ($y = 0; $guard -lt 500; $y += $interval) {
+                $guard++
+                $yr = $wall.Year + $y
+                if ($wall.Month -eq 2 -and $wall.Day -eq 29 -and -not [DateTime]::IsLeapYear($yr)) { continue }
+                if (-not (& $emit (New-Object DateTime($yr, $wall.Month, $wall.Day, $wall.Hour, $wall.Minute, 0)))) { break }
+            }
+        }
+        default {
+            if ($start.Utc -ge $fromUtc -and $start.Utc -le $toUtc) { $out.Add($start.Utc) }
+        }
+    }
+    return ,$out
+}
+
+# Reads a calendar and returns @{ Name; Rows = list of @{ Utc; Title; Text; Notice }; AllDaySkipped }
+function ConvertFrom-Ics([string]$text, [datetime]$fromUtc, [datetime]$toUtc) {
+    $lines = ($text -replace "\r\n", "`n" -replace "\r", "`n" -replace "\n[ \t]", '') -split "`n"
+    $calName = ''
+    $events = New-Object System.Collections.Generic.List[object]
+    $ev = $null; $inAlarm = $false
+    foreach ($line in $lines) {
+        if ($line -eq '') { continue }
+        $ci = $line.IndexOf(':')
+        if ($ci -lt 0) { continue }
+        $left = $line.Substring(0, $ci); $value = $line.Substring($ci + 1)
+        $parts = $left -split ';'
+        $name = $parts[0].ToUpper()
+        $params = @{}
+        foreach ($p in ($parts | Select-Object -Skip 1)) { $kv = $p -split '=', 2; if ($kv.Count -eq 2) { $params[$kv[0].ToUpper()] = $kv[1].Trim('"') } }
+        if ($name -eq 'BEGIN' -and $value -eq 'VEVENT') { $ev = @{ Ex = @() }; continue }
+        if ($name -eq 'END' -and $value -eq 'VEVENT') { if ($ev) { $events.Add($ev) }; $ev = $null; continue }
+        if ($name -eq 'BEGIN' -and $value -eq 'VALARM') { $inAlarm = $true; continue }
+        if ($name -eq 'END' -and $value -eq 'VALARM') { $inAlarm = $false; continue }
+        if (-not $ev) { if ($name -eq 'X-WR-CALNAME') { $calName = ConvertFrom-IcsText $value }; continue }
+        if ($inAlarm) {
+            if ($name -eq 'TRIGGER' -and $params['RELATED'] -ne 'END' -and $value -match '^-P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$') {
+                $mins = [int]$Matches[1] * 10080 + [int]$Matches[2] * 1440 + [int]$Matches[3] * 60 + [int]$Matches[4]
+                if ($mins -gt 0 -and $mins -le 1440 -and (-not $ev.Notice -or $mins -lt $ev.Notice)) { $ev.Notice = $mins }
+            }
+            continue
+        }
+        switch ($name) {
+            'SUMMARY'       { $ev.Title = ConvertFrom-IcsText $value }
+            'DESCRIPTION'   { $ev.Text = ConvertFrom-IcsText $value }
+            'LOCATION'      { $ev.Location = ConvertFrom-IcsText $value }
+            'UID'           { $ev.Uid = $value }
+            'STATUS'        { $ev.Status = $value.ToUpper() }
+            'DTSTART'       { $ev.Start = ConvertFrom-IcsDate $value $params }
+            'RRULE'         { $r = @{}; foreach ($kv in ($value -split ';')) { $x = $kv -split '=', 2; if ($x.Count -eq 2) { $r[$x[0].ToUpper()] = $x[1].ToUpper() } }; $ev.Rule = $r }
+            'EXDATE'        { foreach ($x in ($value -split ',')) { $d = ConvertFrom-IcsDate $x $params; if ($d) { $ev.Ex += $d.Utc } } }
+            'RECURRENCE-ID' { $ev.RecurId = ConvertFrom-IcsDate $value $params }
+        }
+    }
+    # Moved or cancelled single dates of a repeating event
+    $overrides = @{}
+    foreach ($e in $events) { if ($e.RecurId -and $e.Uid) { $overrides["$($e.Uid)|$($e.RecurId.Utc.ToString('yyyyMMddHHmm'))"] = $true } }
+    $rows = New-Object System.Collections.Generic.List[object]
+    $allDay = 0
+    foreach ($e in $events) {
+        if (-not $e.Start) { continue }
+        if ($e.Start.AllDay) { $allDay++; continue }
+        if ($e.Status -eq 'CANCELLED') { continue }
+        $title = if ($e.Title) { $e.Title } else { '(no title)' }
+        $txt = if ($e.Text) { $e.Text } elseif ($e.Location) { $e.Location } else { '' }
+        if ($txt.Length -gt 120) { $txt = $txt.Substring(0, 117) + '...' }
+        $times = if ($e.Rule -and -not $e.RecurId) { Get-IcsOccurrences $e.Start $e.Rule $fromUtc $toUtc } else { @($e.Start.Utc | Where-Object { $_ -ge $fromUtc -and $_ -le $toUtc }) }
+        foreach ($t in $times) {
+            $key = $t.ToString('yyyyMMddHHmm')
+            if ($e.Rule -and -not $e.RecurId) {
+                if ($overrides.ContainsKey("$($e.Uid)|$key")) { continue }
+                if (@($e.Ex | Where-Object { $_.ToString('yyyyMMddHHmm') -eq $key }).Count -gt 0) { continue }
+            }
+            $rows.Add(@{ Utc = $t; Title = $title; Text = $txt; Notice = [int]$e.Notice })
+            if ($rows.Count -ge 3000) { break }
+        }
+    }
+    return @{ Name = $calName; Rows = @($rows | Sort-Object { $_.Utc }); AllDaySkipped = $allDay }
+}
+
+# Writes the schedule-file lines for a calendar (times in UTC; each PC shows its own local time)
+function ConvertTo-ScheduleLines($ics, [string]$name) {
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('Days,Time,Colour,Title,Text,Notice,For')
+    $lines.Add("#! name = $name")
+    $lines.Add('#! timezone = UTC')
+    $lines.Add('# Followed from a calendar link by Desk Reminders. This file is replaced at every check.')
+    foreach ($r in $ics.Rows) {
+        $lines.Add((New-CsvLine @($r.Utc.ToString('yyyy-MM-dd'), $r.Utc.ToString('HH:mm'), '', $r.Title, $r.Text, $(if ($r.Notice -gt 0) { [string]$r.Notice } else { '' }), '') ','))
+    }
+    return ,$lines
+}
+
+# What changed between two versions of a schedule, for you
+function Get-ChangeSummary($oldRows, $newRows, [string[]]$myGroups) {
+    $keyOf = { param($row) "$($row.DaysText)|$($row.TimeText)|$($row.Title)|$(@($row.For) -join '+')" }
+    $oldKeys = @($oldRows | Where-Object { $_.Colour -ne 'skip' } | ForEach-Object { & $keyOf $_ })
+    $nRows = @($newRows | Where-Object { $_.Colour -ne 'skip' })
+    $newKeys = @($nRows | ForEach-Object { & $keyOf $_ })
+    $added = @($nRows | Where-Object { $oldKeys -notcontains (& $keyOf $_) })
+    $removed = @($oldKeys | Where-Object { $newKeys -notcontains $_ }).Count
+    $forMe = @($added | Where-Object { @($_.For).Count -eq 0 -or @($_.For | Where-Object { @($myGroups) -contains $_ }).Count -gt 0 }).Count
+    $parts = @()
+    if ($added.Count -gt 0) {
+        $p = "$($added.Count) new or changed: $forMe for you"
+        if ($added.Count - $forMe -gt 0) { $p += ", $($added.Count - $forMe) for other groups" }
+        $parts += $p
+    }
+    if ($removed -gt 0) { $parts += "$removed removed or changed" }
+    return @{ Added = $added.Count; ForMe = $forMe; Removed = $removed; Text = ($parts -join '; ') }
+}
+
+# --- Following links and synced files ------------------------------------------
+$script:linkJobs = @{}
+
+function Get-SourceByName([string]$fileName) {
+    foreach ($s in $script:loaded.All) { if ($s.FileName -eq $fileName) { return $s } }
+    return $null
+}
+
+function Get-LinkEntry([string]$fileName) {
+    if ($script:settings.Links.ContainsKey($fileName)) { return $script:settings.Links[$fileName] }
+    return $null
+}
+
+function Get-LinkLabel($entry) {
+    if (-not $entry) { return '' }
+    if ($entry.Kind -eq 'file') { return 'Synced file' }
+    if ($entry.Calendar) { return 'Calendar link' }
+    return 'Link'
+}
+
+# A file name in the shared folder that isn't taken by another schedule
+function Get-FreeFileName([string]$name) {
+    $safe = Get-SafeName $name
+    $fileName = "$safe.csv"; $i = 2
+    while (Test-Path -LiteralPath (Join-Path $SharedDir $fileName)) { $fileName = "$safe ($i).csv"; $i++ }
+    return $fileName
+}
+
+# Turns downloaded text (a schedule file or a calendar) into schedule-file lines
+function Read-LinkContent([string]$text, [string]$nameHint) {
+    if ($text -match 'BEGIN:VCALENDAR') {
+        $now = (Get-Date).ToUniversalTime()
+        $ics = ConvertFrom-Ics $text $now.AddDays(-1) $now.AddDays(120)
+        $name = if ($nameHint) { $nameHint } elseif ($ics.Name) { $ics.Name } else { 'Calendar' }
+        $lines = ConvertTo-ScheduleLines $ics $name
+        return @{ Ok = $true; Lines = $lines; Name = $name; Calendar = $true; Count = @($ics.Rows).Count; AllDay = $ics.AllDaySkipped; Groups = @() }
+    }
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('DeskRemindersLink-' + [guid]::NewGuid().ToString('N') + '.csv')
+    try {
+        [IO.File]::WriteAllText($tmp, $text, (New-Object Text.UTF8Encoding($false)))
+        $r = Read-ScheduleFile $tmp
+        $good = @($r.Rows | Where-Object { $_.Colour -ne 'skip' }).Count
+        if (-not $r.HasHeader -or $good -eq 0) {
+            $hint = if ($text -match '<html|<!DOCTYPE') { ' It looks like a web page, not the file itself. For a GitHub Gist, use the "Raw" link; for Google Calendar, the "Secret address in iCal format".' } else { '' }
+            return @{ Ok = $false; Error = "This link doesn't contain a schedule or a calendar.$hint" }
+        }
+        $name = if ($r.Name) { $r.Name } elseif ($nameHint) { $nameHint } else { 'Shared schedule' }
+        $lines = New-Object System.Collections.Generic.List[string]
+        foreach ($l in ($text -split "\r?\n")) { $lines.Add($l) }
+        while ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq '') { $lines.RemoveAt($lines.Count - 1) }
+        return @{ Ok = $true; Lines = $lines; Name = $name; Calendar = $false; Count = $good; AllDay = 0; Groups = @($r.Groups) }
+    } finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+}
+
+# Writes the new version if something changed. Returns the change summary text, or $null when nothing changed.
+function Save-LinkContent([string]$fileName, $content, [switch]$First) {
+    if (-not (Test-Path -LiteralPath $SharedDir)) { New-Item -ItemType Directory -Path $SharedDir | Out-Null }
+    $dest = Join-Path $SharedDir $fileName
+    $strip = { param($ls) @($ls | Where-Object { $_ -notmatch '^\s*"?#!\s*updated\s*[=:]' }) -join "`n" }
+    $old = $null
+    if (Test-Path -LiteralPath $dest) {
+        $cur = [IO.File]::ReadAllLines($dest, [Text.Encoding]::UTF8)
+        if ((& $strip $cur) -eq (& $strip $content.Lines)) { return $null }
+        $old = Read-ScheduleFile $dest
+    }
+    [IO.File]::WriteAllLines($dest, [string[]]$content.Lines.ToArray(), (New-Object Text.UTF8Encoding($true)))
+    if ($First -or -not $old) { return '' }
+    $new = Read-ScheduleFile $dest
+    $mine = if ($script:settings.MyGroups.ContainsKey($fileName)) { @($script:settings.MyGroups[$fileName]) } else { @() }
+    $sum = Get-ChangeSummary $old.Rows $new.Rows $mine
+    if ($sum.Text) { return $sum.Text }
+    return 'Updated (no change to the events)'
+}
+
+# Handles a finished check of one link
+function Complete-LinkCheck([string]$fileName, $result) {
+    $entry = Get-LinkEntry $fileName
+    if (-not $entry) { return }
+    $entry.Checked = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+    $hadError = [bool]$entry.Error
+    if (-not $result -or -not $result.Ok) {
+        $entry.Error = if ($result) { [string]$result.Error } else { 'No answer' }
+        if (-not $hadError) { $tray.ShowBalloonTip(6000, "Couldn't check '$($entry.Name)'", "$($entry.Error)`nThe last version you have keeps working.", 'Warning') }
+        Save-Settings
+        Refresh-ScheduleWindow
+        return
+    }
+    $content = Read-LinkContent $result.Text $(if ($entry.Calendar) { $entry.Name } else { '' })
+    if (-not $content.Ok) {
+        $entry.Error = $content.Error
+        if (-not $hadError) { $tray.ShowBalloonTip(6000, "Couldn't read '$($entry.Name)'", $content.Error, 'Warning') }
+        Save-Settings
+        Refresh-ScheduleWindow
+        return
+    }
+    $entry.Error = ''
+    $entry.Calendar = [bool]$content.Calendar
+    $summary = Save-LinkContent $fileName $content
+    Save-Settings
+    if ($null -ne $summary) {
+        Sync-Schedule -Force
+        if ($summary) { $tray.ShowBalloonTip(8000, "'$($entry.Name)' was updated", $summary, 'Info') }
+        # New groups appeared and you haven't picked one yet
+        if (@($content.Groups).Count -gt 0 -and @($script:settings.MyGroups[$fileName]).Count -eq 0 -and -not $entry.AskedGroups) {
+            $entry.AskedGroups = $true; Save-Settings
+            $tray.ShowBalloonTip(8000, "'$($entry.Name)' has groups", 'Pick yours: select it in the Schedules list > Options.', 'Info')
+        }
+    } else {
+        Refresh-ScheduleWindow
+    }
+}
+
+# Starts background checks for links that are due (every $LinkMinutes minutes, or now with -Force)
+function Start-LinkChecks([switch]$Force, [string]$Only = '') {
+    foreach ($fileName in @($script:settings.Links.Keys)) {
+        if ($Only -and $fileName -ne $Only) { continue }
+        $e = $script:settings.Links[$fileName]
+        if ($e.Kind -ne 'url' -or $script:linkJobs.ContainsKey($fileName)) { continue }
+        if (@($script:settings.Disabled) -contains $fileName -and -not $Force) { continue }
+        $due = $true
+        if (-not $Force -and $e.Checked) {
+            $last = [datetime]::MinValue
+            if ([datetime]::TryParseExact([string]$e.Checked, 'yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$last)) {
+                $due = ((Get-Date) - $last).TotalMinutes -ge $LinkMinutes
+            }
+        }
+        if (-not $due) { continue }
+        $ps = [powershell]::Create()
+        [void]$ps.AddScript($LinkFetch.ToString()).AddArgument([string]$e.Url)
+        $script:linkJobs[$fileName] = @{ PS = $ps; Handle = $ps.BeginInvoke(); Started = Get-Date }
+    }
+}
+
+# Collects finished background checks (called by the clock)
+function Receive-LinkChecks {
+    foreach ($fileName in @($script:linkJobs.Keys)) {
+        $j = $script:linkJobs[$fileName]
+        if (-not $j.Handle.IsCompleted) {
+            if (((Get-Date) - $j.Started).TotalSeconds -gt 60) { try { $j.PS.Stop() } catch {}; $j.PS.Dispose(); $script:linkJobs.Remove($fileName) }
+            continue
+        }
+        $res = $null
+        try { $out = $j.PS.EndInvoke($j.Handle); if ($out.Count -gt 0) { $res = $out[0] } } catch { $res = @{ Ok = $false; Error = $_.Exception.Message } }
+        $j.PS.Dispose()
+        $script:linkJobs.Remove($fileName)
+        if ($fileName -eq '__update__') { Complete-UpdateCheck $res } else { Complete-LinkCheck $fileName $res }
+    }
+}
+
+# Synced-folder files: copy in the new version as soon as the file changes
+function Update-FileLinks {
+    foreach ($fileName in @($script:settings.Links.Keys)) {
+        $e = $script:settings.Links[$fileName]
+        if ($e.Kind -ne 'file') { continue }
+        $path = [string]$e.Url
+        if (-not (Test-Path -LiteralPath $path)) {
+            if (-not $e.Missing) { $e.Missing = $true; $e.Error = 'The file is missing (is the synced folder still there?)'; Save-Settings; Refresh-ScheduleWindow }
+            continue
+        }
+        $stamp = (Get-Item -LiteralPath $path).LastWriteTimeUtc.Ticks
+        if ($e.Missing) { $e.Missing = $false; $e.Error = ''; $e.Stamp = '' }      # it's back
+        if ([string]$stamp -eq [string]$e.Stamp) { continue }
+        $e.Stamp = [string]$stamp
+        try { $text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8) } catch { continue }   # still being written: next tick
+        Complete-LinkCheck $fileName @{ Ok = $true; Text = $text }
+    }
+}
+
+# Asks which groups you're in (when the schedule has groups)
+function Request-MyGroups([string]$fileName, [string]$name, $groups, $owner) {
+    $groups = @($groups)
+    if ($groups.Count -eq 0) { return '' }
+    $mine = if ($script:settings.MyGroups.ContainsKey($fileName)) { @($script:settings.MyGroups[$fileName] | Where-Object { $groups -contains $_ }) } else { @() }
+    $picked = Show-GroupPicker $name $groups $mine $owner
+    if ($null -ne $picked) { $mine = @($picked) }
+    $script:settings.MyGroups[$fileName] = @($mine)
+    if ($mine.Count -gt 0) { return "`nYour groups: $($mine -join ', ')." }
+    return "`nNo group picked: only events for everyone pop up. Change it under Options."
+}
+
+# Import > From a link
+function Add-LinkSubscription($owner) {
+    $d = New-Dialog 'Follow a link' 560 330
+    $intro = New-Note "Paste the link to a shared schedule or a calendar. Desk Reminders checks it every $LinkMinutes minutes and tells you what changed." 16 12 528 40
+    $intro.ForeColor = [System.Drawing.SystemColors]::ControlText
+    $urlBox = New-Object System.Windows.Forms.TextBox
+    $urlBox.SetBounds(16, 60, 528, 28)
+    try { $clip = [System.Windows.Forms.Clipboard]::GetText(); if ($clip -match '^(https?|webcals?)://\S+$') { $urlBox.Text = $clip.Trim() } } catch {}
+    $examples = New-Note ("Works with:`n" +
+        "- a GitHub Gist (or any https link to a schedule .csv file)`n" +
+        "- Google Calendar: Settings > your calendar > 'Secret address in iCal format'`n" +
+        "- Outlook: Settings > Calendar > Shared calendars > Publish > ICS link`n" +
+        "- Apple iCloud public calendars, Teamup and other .ics links") 16 96 528 92
+    $nameLbl = New-Label 'Name (optional)' 16 196 120
+    $nameBox = New-Object System.Windows.Forms.TextBox
+    $nameBox.SetBounds(140, 196, 404, 28)
+    $privacy = New-Note 'Only downloads: nothing about you is sent. Your groups, mutes and other settings stay on this PC.' 16 236 528 36
+    $ok = New-Btn 'Follow' 340 282 96 34; $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $cancel = New-Btn 'Cancel' 448 282 96 34; $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $d.AcceptButton = $ok; $d.CancelButton = $cancel
+    $d.Controls.AddRange(@($intro, $urlBox, $examples, $nameLbl, $nameBox, $privacy, $ok, $cancel))
+    $res = Show-Dialog $d $owner
+    $raw = $urlBox.Text; $nameHint = ($nameBox.Text -replace '[\r\n=:]', ' ').Trim()
+    $d.Dispose()
+    if ($res -ne [System.Windows.Forms.DialogResult]::OK -or -not $raw.Trim()) { return }
+
+    $url = ConvertTo-LinkUrl $raw
+    if (-not $url) { Show-Msg $owner "That doesn't look like a web link. It should start with https:// (or webcal:// for calendars)." 'Follow a link' | Out-Null; return }
+    foreach ($k in @($script:settings.Links.Keys)) {
+        if ($script:settings.Links[$k].Url -eq $url) { Show-Msg $owner "You already follow this link ('$($script:settings.Links[$k].Name)')." 'Follow a link' | Out-Null; return }
+    }
+    $old = [System.Windows.Forms.Cursor]::Current
+    [System.Windows.Forms.Cursor]::Current = [System.Windows.Forms.Cursors]::WaitCursor
+    $result = & $LinkFetch $url
+    [System.Windows.Forms.Cursor]::Current = $old
+    if (-not $result.Ok) { Show-Msg $owner "Couldn't open the link:`n$($result.Error)`n`nCheck that it's public (or a secret/share link) and try again." 'Follow a link' 'OK' 'Warning' | Out-Null; return }
+    $content = Read-LinkContent $result.Text $nameHint
+    if (-not $content.Ok) { Show-Msg $owner $content.Error 'Follow a link' 'OK' 'Warning' | Out-Null; return }
+
+    $fileName = Get-FreeFileName $content.Name
+    [void](Save-LinkContent $fileName $content -First)
+    Clear-ScheduleSettings $fileName
+    $script:settings.Links[$fileName] = @{ Kind = 'url'; Url = $url; Name = $content.Name; Calendar = [bool]$content.Calendar; Checked = (Get-Date).ToString('yyyy-MM-dd HH:mm'); Error = '' }
+    $groupNote = Request-MyGroups $fileName $content.Name $content.Groups $owner
+    Save-Settings
+    $script:selSource = $fileName
+    Sync-Schedule -Force
+    $what = if ($content.Calendar) { "$($content.Count) event(s) in the next 4 months" + $(if ($content.AllDay -gt 0) { " (all-day events are left out)" } else { '' }) } else { "$($content.Count) reminder(s)" }
+    Show-Msg $owner "Now following '$($content.Name)': $what.$groupNote`n`nIt's checked every $LinkMinutes minutes (or click Check now under Options). When it changes, you'll see what's new for you." 'Follow a link' | Out-Null
+}
+
+# Import > Linked file in a synced folder
+function Add-FileLink($owner) {
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Title = 'Pick the schedule in your synced folder (OneDrive, Google Drive, Dropbox, ...)'
+    $dlg.Filter = 'Schedules and calendars (*.csv;*.ics)|*.csv;*.ics|All files (*.*)|*.*'
+    $res = if ($owner) { $dlg.ShowDialog($owner) } else { $dlg.ShowDialog() }
+    if ($res -ne [System.Windows.Forms.DialogResult]::OK) { return }
+    $path = $dlg.FileName
+    foreach ($k in @($script:settings.Links.Keys)) {
+        if ($script:settings.Links[$k].Url -eq $path) { Show-Msg $owner "You already follow this file ('$($script:settings.Links[$k].Name)')." 'Linked file' | Out-Null; return }
+    }
+    $content = Read-LinkContent ([IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)) ''
+    if (-not $content.Ok) { Show-Msg $owner $content.Error 'Linked file' 'OK' 'Warning' | Out-Null; return }
+    $fileName = Get-FreeFileName $content.Name
+    [void](Save-LinkContent $fileName $content -First)
+    Clear-ScheduleSettings $fileName
+    $script:settings.Links[$fileName] = @{ Kind = 'file'; Url = $path; Name = $content.Name; Calendar = [bool]$content.Calendar; Stamp = [string](Get-Item -LiteralPath $path).LastWriteTimeUtc.Ticks; Checked = (Get-Date).ToString('yyyy-MM-dd HH:mm'); Error = '' }
+    $groupNote = Request-MyGroups $fileName $content.Name $content.Groups $owner
+    Save-Settings
+    $script:selSource = $fileName
+    Sync-Schedule -Force
+    Show-Msg $owner "Now following '$($content.Name)' from:`n$path$groupNote`n`nWhen the file changes (e.g. the organiser updates it in the shared folder), you get the new version within seconds." 'Linked file' | Out-Null
+}
+
+# Stop following: keep the last version as a normal imported copy
+function Stop-Following([string]$fileName) {
+    if ($script:settings.Links.ContainsKey($fileName)) { $script:settings.Links.Remove($fileName) }
+    Save-Settings
+    Sync-Schedule -Force
+}
+
+# The Import button: three ways
+function Show-ImportMenu($anchor) {
+    $m = New-Object System.Windows.Forms.ContextMenuStrip
+    $m.Font = $UiFont
+    $a = $m.Items.Add('From a file (a copy)'); $a.Add_Click({ Import-SharedSchedule $script:sw })
+    $b = $m.Items.Add('From a link (stays up to date)'); $b.Add_Click({ Add-LinkSubscription $script:sw })
+    $c = $m.Items.Add('Linked file in a synced folder (stays up to date)'); $c.Add_Click({ Add-FileLink $script:sw })
+    $b.Font = $BoldFont
+    $b.ToolTipText = 'A GitHub Gist, Google Calendar, Outlook or any .ics / .csv link'
+    $c.ToolTipText = 'OneDrive, Google Drive, Dropbox or a network folder'
+    Set-MenuTheme $m
+    $m.Show($anchor, (New-Object System.Drawing.Point(0, $anchor.Height)))
+}
+
+# --- Export: a copy, a copy kept up to date in a folder, or text for a link -------
+function Copy-ForLink($s) {
+    $text = [IO.File]::ReadAllText($s.File, [Text.Encoding]::UTF8)
+    try { [System.Windows.Forms.Clipboard]::SetText($text) } catch { Show-Msg $script:sw "Couldn't copy: $($_.Exception.Message)" 'Export' | Out-Null; return }
+    $ans = Show-Msg $script:sw ("'$($s.Name)' is copied.`n`nTo share it as a link with a free GitHub Gist:`n" +
+        "1. Click OK: gist.github.com opens.`n" +
+        "2. File name: $((Get-SafeName $s.Name)).csv - paste into the big box.`n" +
+        "3. Click 'Create secret gist' and copy the page's link.`n" +
+        "4. Post that link: members choose Import > From a link.`n`n" +
+        "After a change: Export > Copy for a link again, then Edit the gist, paste, Update.") 'Copy for a link' 'OKCancel' 'Information'
+    if ($ans -eq [System.Windows.Forms.DialogResult]::OK) { Open-Url 'https://gist.github.com/' }
+}
+
+function Set-PublishFolder($s) {
+    $fb = New-Object System.Windows.Forms.FolderBrowserDialog
+    $fb.Description = "Pick a synced folder (OneDrive, Google Drive, Dropbox, ...). A copy of '$($s.Name)' is kept up to date there after every change."
+    if ($fb.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
+    $path = Join-Path $fb.SelectedPath ((Get-SafeName $s.Name) + '.csv')
+    $script:settings.Publish[$s.FileName] = $path
+    Save-Settings
+    Publish-Copies $s.FileName
+    Show-Msg $script:sw "From now on, every change to '$($s.Name)' is copied to:`n$path`n`nShare that folder (or the file) with your members and tell them: Import > Linked file in a synced folder. They get your changes within seconds." 'Keep a copy updated' | Out-Null
+}
+
+# Copies a schedule you made to the folder you picked (after each change)
+function Publish-Copies([string]$fileName = '') {
+    foreach ($k in @($script:settings.Publish.Keys)) {
+        if ($fileName -and $k -ne $fileName) { continue }
+        $src = Join-Path $SharedDir $k
+        if (-not (Test-Path -LiteralPath $src)) { continue }
+        try { Copy-Item -LiteralPath $src -Destination $script:settings.Publish[$k] -Force } catch {
+            $tray.ShowBalloonTip(6000, "Couldn't update the copy of '$k'", $_.Exception.Message, 'Warning')
+        }
+    }
+}
+
+function Add-ExportItems($menuItems, $s) {
+    $x = New-Object System.Windows.Forms.ToolStripMenuItem 'Save a copy as a file'
+    $x.Tag = $s.FileName
+    $x.Add_Click({ $t = Get-SourceByName ([string]$this.Tag); if ($t) { Share-Schedule $t $script:sw } })
+    [void]$menuItems.Add($x)
+    if ($s.Owned) {
+        if ($script:settings.Publish.ContainsKey($s.FileName)) {
+            $y = New-Object System.Windows.Forms.ToolStripMenuItem 'Stop keeping a copy updated'
+            $y.ToolTipText = "Now kept up to date in: $($script:settings.Publish[$s.FileName])"
+            $y.Tag = $s.FileName
+            $y.Add_Click({ $script:settings.Publish.Remove([string]$this.Tag); Save-Settings })
+        } else {
+            $y = New-Object System.Windows.Forms.ToolStripMenuItem 'Keep a copy updated in a folder'
+            $y.ToolTipText = 'For a synced folder (OneDrive, Google Drive, Dropbox): members follow it and get your changes within seconds'
+            $y.Tag = $s.FileName
+            $y.Add_Click({ $t = Get-SourceByName ([string]$this.Tag); if ($t) { Set-PublishFolder $t } })
+        }
+        [void]$menuItems.Add($y)
+        $z = New-Object System.Windows.Forms.ToolStripMenuItem 'Copy for a link (GitHub Gist)'
+        $z.Tag = $s.FileName
+        $z.Add_Click({ $t = Get-SourceByName ([string]$this.Tag); if ($t) { Copy-ForLink $t } })
+        [void]$menuItems.Add($z)
+    }
+}
+
+# Export = share a schedule: pick it (when needed), then how
+function Export-SharedSchedule($anchor) {
+    $shared = @($script:loaded.All | Where-Object { -not $_.IsMine })
+    if ($shared.Count -eq 0) {
+        Show-Msg $script:sw "There is no shared schedule to export yet.`n`nClick '+ New shared schedule' to make one for your guild or team, add events, then Export it." 'Export' | Out-Null
+        return
+    }
+    $m = New-Object System.Windows.Forms.ContextMenuStrip
+    $m.Font = $UiFont
+    $sel = Get-SideSource
+    if (-not $sel.IsMine) { Add-ExportItems $m.Items $sel }
+    elseif ($shared.Count -eq 1) { Add-ExportItems $m.Items $shared[0] }
+    else {
+        foreach ($s in $shared) {
+            $mi = New-Object System.Windows.Forms.ToolStripMenuItem("$Dot  $($s.Name)")
+            $mi.ForeColor = To-TextColor (To-Color $s.Color)
+            Add-ExportItems $mi.DropDownItems $s
+            [void]$m.Items.Add($mi)
+        }
+    }
+    Set-MenuTheme $m
+    $m.Show($anchor, (New-Object System.Drawing.Point(0, $anchor.Height)))
+}
+
+# --- New version available? (once a day; only asks GitHub for the latest version number) ---
+$script:newVersion = $null
+function Start-UpdateCheck([switch]$Force) {
+    if (-not $script:settings.CheckUpdates -and -not $Force) { return }
+    $today = (Get-Date).ToString('yyyy-MM-dd')
+    if (-not $Force -and $script:settings.UpdateChecked -eq $today) { return }
+    if ($script:linkJobs.ContainsKey('__update__')) { return }
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript($LinkFetch.ToString()).AddArgument("https://api.github.com/repos/7ab9ne3021sn4b/DeskReminders/releases/latest")
+    $script:linkJobs['__update__'] = @{ PS = $ps; Handle = $ps.BeginInvoke(); Started = Get-Date }
+}
+
+function Complete-UpdateCheck($res) {
+    if (-not $res -or -not $res.Ok) { return }      # offline or GitHub busy: try again tomorrow
+    $script:settings.UpdateChecked = (Get-Date).ToString('yyyy-MM-dd')
+    try { $tag = [string]($res.Text | ConvertFrom-Json).tag_name } catch { $tag = '' }
+    $v = $tag.TrimStart('v', 'V')
+    $latest = $null; $mine = $null
+    if ([version]::TryParse($v, [ref]$latest) -and [version]::TryParse($AppVersion, [ref]$mine) -and $latest -gt $mine) {
+        $script:newVersion = $v
+        if ($script:settings.LatestSeen -ne $v) {
+            $script:settings.LatestSeen = $v
+            $tray.ShowBalloonTip(10000, "Desk Reminders $v is available", 'Open Desk Reminders and click the green link at the bottom, or see GitHub > What''s new.', 'Info')
+        }
+        Update-UpdateNotice
+    }
+    Save-Settings
+}
+
+function Update-UpdateNotice {
+    if (-not $script:sw -or $script:sw.IsDisposed -or -not $script:swc.UpdateLink) { return }
+    $l = $script:swc.UpdateLink
+    if ($script:newVersion) {
+        $l.Text = "New version $($script:newVersion) available - download"
+        $l.Visible = $true
+    } else { $l.Visible = $false }
+}
+
 # --- Colour picker (palette + custom) -------------------------------------------
 function New-ColorPicker([int]$x, [int]$y, [string]$current) {
     $box = New-Object System.Windows.Forms.ComboBox
@@ -1807,6 +2674,11 @@ function Show-ScheduleOptions($src, $owner) {
     $hiddenCount = if ($src.IsMine) { 0 } else { @($script:settings.Hidden | Where-Object { $_.Key.StartsWith("$($src.Name)|") }).Count }
     if ($hiddenCount -gt 0) { $h += 50 }
     if ($src.IsMine) { $h += 50 }
+    $h += 50                                   # sound
+    $link = Get-LinkEntry $fileName
+    if ($link) { $h += 104 }
+    $pub = if ($script:settings.Publish.ContainsKey($fileName)) { $script:settings.Publish[$fileName] } else { $null }
+    if ($pub) { $h += 64 }
     $title = if ($src.IsMine) { Get-MineName } else { $src.Name }
     $d = New-Dialog "Options - $title" 520 $h
     $ctl = @()
@@ -1835,6 +2707,71 @@ function Show-ScheduleOptions($src, $owner) {
     $qText = if ($script:settings.Quiet.On) { "Quiet hours are $($script:settings.Quiet.From)-$($script:settings.Quiet.To) (change them in Settings)." } else { 'Quiet hours are off right now (turn them on in Settings).' }
     $ctl += New-Note $qText 140 ($y + 28) 364 20
     $y += 64
+
+    # Its own sound (or the one from Settings)
+    $ctl += New-Label 'Sound' 16 $y
+    $sndBox = New-Object System.Windows.Forms.ComboBox
+    $sndBox.DropDownStyle = 'DropDownList'
+    $sndBox.SetBounds(140, $y, 270, 28)
+    $script:optSounds = @('') + @($SoundChoices)
+    [void]$sndBox.Items.Add("Same as Settings ($(Get-SoundLabel $script:settings.Sound))")
+    foreach ($x in $SoundChoices) { [void]$sndBox.Items.Add((Get-SoundLabel $x)) }
+    $cur = if ($script:settings.Sounds.ContainsKey($fileName)) { [string]$script:settings.Sounds[$fileName] } else { '' }
+    $sndBox.SelectedIndex = [math]::Max(0, [array]::IndexOf([string[]]$script:optSounds, $cur))
+    $sndPlay = New-Btn 'Play' 418 ($y - 1) 86 30
+    $sndPlay.Tag = $sndBox
+    $sndPlay.Add_Click({ $i = $this.Tag.SelectedIndex; $snd = if ($i -gt 0) { $script:optSounds[$i] } else { $script:settings.Sound }; Play-Chime -Preview -Sound $snd })
+    $sndBox.Add_SelectedIndexChanged({ $i = $this.SelectedIndex; $snd = if ($i -gt 0) { $script:optSounds[$i] } else { $script:settings.Sound }; Play-Chime -Preview -Sound $snd })
+    $ctl += @($sndBox, $sndPlay)
+    $y += 50
+
+    # Followed link or synced file
+    if ($link) {
+        $ctl += New-Label $(if ($link.Kind -eq 'file') { 'Synced file' } else { 'Link' }) 16 $y
+        $lnk = New-Object System.Windows.Forms.TextBox
+        $lnk.ReadOnly = $true
+        $lnk.Text = [string]$link.Url
+        $lnk.SetBounds(140, $y, 364, 28)
+        $ctl += $lnk
+        $state = if ($link.Error) { "Problem: $($link.Error)" } else { "Last checked: $($link.Checked). " + $(if ($link.Kind -eq 'file') { 'Changes come in within seconds.' } else { "Checked every $LinkMinutes minutes." }) }
+        $ctl += New-Note $state 140 ($y + 30) 364 36
+        $chk = New-Btn 'Check now' 140 ($y + 66) 120 30
+        $chk.Tag = $fileName
+        $chk.Add_Click({
+            $fn = [string]$this.Tag
+            $e = Get-LinkEntry $fn
+            if (-not $e) { return }
+            if ($e.Kind -eq 'file') { $e.Stamp = ''; Update-FileLinks } else {
+                $cur = [System.Windows.Forms.Cursor]::Current
+                [System.Windows.Forms.Cursor]::Current = [System.Windows.Forms.Cursors]::WaitCursor
+                Complete-LinkCheck $fn (& $LinkFetch ([string]$e.Url))
+                [System.Windows.Forms.Cursor]::Current = $cur
+            }
+            $this.Text = 'Checked'
+            $this.Enabled = $false
+        })
+        $stop = New-Btn 'Stop following' 268 ($y + 66) 140 30
+        $stop.Tag = $fileName
+        $stop.Add_Click({
+            $ans = Show-Msg $this.FindForm() 'Stop following this link? You keep the last version as a normal copy (it no longer updates).' 'Stop following' 'YesNo' 'Question'
+            if ($ans -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+            Stop-Following ([string]$this.Tag)
+            $this.Text = 'Stopped'; $this.Enabled = $false
+        })
+        $ctl += @($chk, $stop)
+        $y += 104
+    }
+
+    # A copy kept up to date in a folder (for schedules you made)
+    if ($pub) {
+        $ctl += New-Label 'Kept up to date' 16 $y 120
+        $ctl += New-Note "A copy is updated after every change in:`n$pub" 140 $y 364 40
+        $unpub = New-Btn 'Stop' 418 ($y + 2) 86 30
+        $unpub.Tag = $fileName
+        $unpub.Add_Click({ $script:settings.Publish.Remove([string]$this.Tag); Save-Settings; $this.Text = 'Stopped'; $this.Enabled = $false })
+        $ctl += $unpub
+        $y += 64
+    }
 
     $groupList = $null
     if ($groups.Count -gt 0) {
@@ -1891,6 +2828,7 @@ function Show-ScheduleOptions($src, $owner) {
     $res = Show-Dialog $d $owner
     $newColor = $color.Tag.Value
     $newQuiet = $quiet.Checked
+    $newSound = $script:optSounds[[math]::Max(0, $sndBox.SelectedIndex)]
     $newName = if ($nameBox) { ($nameBox.Text -replace '[\r\n]', ' ').Trim() } else { $null }
     $newMine = $null; $newGroups = $null
     if ($groupList) { $newMine = @($groupList.CheckedItems | ForEach-Object { [string]$_ }) }
@@ -1900,6 +2838,7 @@ function Show-ScheduleOptions($src, $owner) {
 
     $script:settings.Colors[$fileName] = $newColor
     $script:settings.QuietAllow[$fileName] = [bool]$newQuiet
+    if ($newSound) { $script:settings.Sounds[$fileName] = $newSound } elseif ($script:settings.Sounds.ContainsKey($fileName)) { $script:settings.Sounds.Remove($fileName) }
     if ($null -ne $newName) { $script:settings.MineName = $(if ($newName -eq '' -or $newName -eq 'My schedule') { '' } else { $newName }) }
     if ($null -ne $newMine) { $script:settings.MyGroups[$fileName] = @($newMine) }
     Save-Settings
@@ -1957,28 +2896,6 @@ function Clear-MySchedule {
     } 'remove all')
 }
 
-# Export = save a copy of a shared schedule to post for your members
-function Export-SharedSchedule($anchor) {
-    $shared = @($script:loaded.All | Where-Object { -not $_.IsMine })
-    if ($shared.Count -eq 0) {
-        Show-Msg $script:sw "There is no shared schedule to export yet.`n`nClick '+ New shared schedule' to make one for your guild or team, add events, then Export it to post in Discord." 'Export' | Out-Null
-        return
-    }
-    $sel = Get-SideSource
-    if (-not $sel.IsMine) { Share-Schedule $sel $script:sw; return }
-    if ($shared.Count -eq 1) { Share-Schedule $shared[0] $script:sw; return }
-    # More than one: pick from a small menu under the button
-    $m = New-Object System.Windows.Forms.ContextMenuStrip
-    $m.Font = $UiFont
-    foreach ($s in $shared) {
-        $mi = New-Object System.Windows.Forms.ToolStripMenuItem("$Dot  $($s.Name)")
-        $mi.ForeColor = To-Color $s.Color
-        $mi.Tag = $s.FileName
-        $mi.Add_Click({ foreach ($s in $script:loaded.All) { if ($s.FileName -eq $this.Tag) { Share-Schedule $s $script:sw } } })
-        [void]$m.Items.Add($mi)
-    }
-    $m.Show($anchor, (New-Object System.Drawing.Point(0, $anchor.Height)))
-}
 
 # Runs a scriptblock right after the current click has finished
 # (for actions that rebuild the control that was clicked)
@@ -1995,12 +2912,12 @@ function New-ScheduleCard($s, [bool]$selected) {
     $card = New-Object System.Windows.Forms.Panel
     $card.Size = New-Object System.Drawing.Size(204, 58)
     $card.Margin = New-Object System.Windows.Forms.Padding(6, 3, 4, 3)
-    $card.BackColor = if ($selected) { Get-Tint $col 0.86 } else { [System.Drawing.Color]::White }
+    $card.BackColor = if ($selected) { Get-Soft $col 0.86 } else { $script:P.Surface }
     $card.Cursor = [System.Windows.Forms.Cursors]::Hand
     $card.Tag = $s.FileName
     $bar = New-Object System.Windows.Forms.Panel
     $bar.SetBounds(0, 0, 6, 58)
-    $bar.BackColor = if ($s.Enabled) { $col } else { [System.Drawing.Color]::Silver }
+    $bar.BackColor = if ($s.Enabled) { $col } else { $script:P.Grey }
     $x = 14
     $parts = @()
     if (-not $s.IsMine) {
@@ -2023,21 +2940,23 @@ function New-ScheduleCard($s, [bool]$selected) {
     $name = New-Object System.Windows.Forms.Label
     $name.Text = if ($s.IsMine) { Get-MineName } else { $s.Name }
     $name.Font = $BoldFont
-    $name.ForeColor = if ($s.Enabled) { $col } else { [System.Drawing.Color]::Gray }
+    $name.ForeColor = if ($s.Enabled) { To-TextColor $col } else { $script:P.Faint }
     $name.AutoEllipsis = $true
     $name.SetBounds($x, 8, (198 - $x), 22)
     $count = @($s.Rows | Where-Object { $_.Colour -ne 'skip' }).Count
     if ($s.IsMine) { $parts = @('Your reminders', "$count row(s)") }
     else {
         if (-not $s.Enabled) { $parts += 'Off' }
-        $parts += $(if ($s.Owned) { 'Made by you' } else { 'Shared' })
+        $le = Get-LinkEntry $s.FileName
+        if ($le -and $le.Error) { $parts += 'link problem' }
+        $parts += $(if ($le) { Get-LinkLabel $le } elseif ($s.Owned) { 'Made by you' } else { 'Shared' })
         $parts += "$count event(s)"
         if (@($s.Groups).Count -gt 0) { $parts += $(if (@($s.MyGroups).Count -gt 0) { @($s.MyGroups) -join ', ' } else { 'no group picked' }) }
     }
     $sub = New-Object System.Windows.Forms.Label
     $sub.Text = $parts -join '  -  '
     $sub.Font = $SmallFont
-    $sub.ForeColor = [System.Drawing.Color]::DimGray
+    $sub.ForeColor = $script:P.Dim
     $sub.AutoEllipsis = $true
     $sub.SetBounds($x, 31, (198 - $x), 20)
     $script:sideTip.SetToolTip($sub, $sub.Text)
@@ -2065,7 +2984,7 @@ function Refresh-Sidebar {
         if (@($script:loaded.All).Count -le 1) {
             $hint = New-Object System.Windows.Forms.Label
             $hint.Text = "No shared schedules yet.`n`nImport one your guild or team shared with you, or make your own with '+ New shared schedule'."
-            $hint.ForeColor = [System.Drawing.Color]::Gray
+            $hint.ForeColor = $script:P.Faint
             $hint.Font = $SmallFont
             $hint.Size = New-Object System.Drawing.Size(200, 96)
             $hint.Margin = New-Object System.Windows.Forms.Padding(12, 10, 4, 0)
@@ -2080,7 +2999,7 @@ function Refresh-Sidebar {
         $src = $null
         foreach ($s in $script:loaded.All) { if ($s.FileName -eq $card.Tag) { $src = $s } }
         if (-not $src) { continue }
-        $back = if ($card.Tag -eq $script:selSource) { Get-Tint (To-Color $src.Color) 0.86 } else { [System.Drawing.Color]::White }
+        $back = if ($card.Tag -eq $script:selSource) { Get-Soft (To-Color $src.Color) 0.86 } else { $script:P.Surface }
         $card.BackColor = $back
         foreach ($ch in $card.Controls) { if ($ch -is [System.Windows.Forms.CheckBox]) { $ch.BackColor = $back } }
     }
@@ -2293,7 +3212,7 @@ function Restore-Reminders($owner) {
 # --- Settings window -------------------------------------------------------------
 function Show-SettingsDialog($owner) {
     $st = $script:settings
-    $d = New-Dialog 'Settings - Desk Reminders' 560 598
+    $d = New-Dialog 'Settings - Desk Reminders' 1108 420
     $ctl = @()
 
     # Sound
@@ -2373,7 +3292,7 @@ function Show-SettingsDialog($owner) {
     $gPop.Controls.AddRange(@((New-Label 'Corner' 14 24 120), $corner, (New-Label 'Screen' 14 58 120), $screen, $test))
 
     # Windows
-    $gWin = New-Object System.Windows.Forms.GroupBox; $gWin.Text = 'Windows'; $gWin.SetBounds(12, 366, 536, 170)
+    $gWin = New-Object System.Windows.Forms.GroupBox; $gWin.Text = 'Windows'; $gWin.SetBounds(560, 8, 536, 170)
     $startup = New-Object System.Windows.Forms.CheckBox; $startup.Text = 'Start Desk Reminders when I log in to Windows'
     $startup.Checked = [bool](Test-StartupLink); $startup.SetBounds(14, 24, 500, 26)
     $splashOn = New-Object System.Windows.Forms.CheckBox; $splashOn.Text = 'Show the welcome screen and open the schedule when it starts'
@@ -2390,12 +3309,21 @@ function Show-SettingsDialog($owner) {
     $bkNote = New-Note 'A backup holds your schedule, shared schedules and settings in one zip, e.g. for a new PC.' 14 128 510 36
     $gWin.Controls.AddRange(@($startup, $splashOn, $bk, $rs, $of, $bkNote))
 
-    $ok = New-Object System.Windows.Forms.Button; $ok.Text = 'Save'; $ok.SetBounds(350, 550, 96, 34)
+    # Look and updates
+    $gLook = New-Object System.Windows.Forms.GroupBox; $gLook.Text = 'Updates'; $gLook.SetBounds(560, 186, 536, 120)
+    $updOn = New-Object System.Windows.Forms.CheckBox; $updOn.Text = 'Tell me when a new version is out (checks once a day)'
+    $updOn.Checked = [bool]$st.CheckUpdates; $updOn.SetBounds(14, 26, 510, 26)
+    $updNow = New-Object System.Windows.Forms.Button; $updNow.Text = 'Check now'; $updNow.SetBounds(14, 62, 120, 30)
+    $updNow.Add_Click({ Start-UpdateCheck -Force; $this.Text = 'Checking'; $this.Enabled = $false })
+    $updNote = New-Note 'Only asks GitHub for the latest version number. Nothing about you is sent.' 142 62 380 40
+    $gLook.Controls.AddRange(@($updOn, $updNow, $updNote))
+
+    $ok = New-Object System.Windows.Forms.Button; $ok.Text = 'Save'; $ok.SetBounds(896, 372, 96, 34)
     $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
-    $cancel = New-Object System.Windows.Forms.Button; $cancel.Text = 'Cancel'; $cancel.SetBounds(452, 550, 96, 34)
+    $cancel = New-Object System.Windows.Forms.Button; $cancel.Text = 'Cancel'; $cancel.SetBounds(1000, 372, 96, 34)
     $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $d.AcceptButton = $ok; $d.CancelButton = $cancel
-    $d.Controls.AddRange(@($gSound, $gQuiet, $gPop, $gWin, $ok, $cancel))
+    $d.Controls.AddRange(@($gSound, $gQuiet, $gPop, $gWin, $gLook, $ok, $cancel))
     $script:setCtl = @{ Sound = $soundBox; Corner = $corner; Screen = $screen; Volume = $vol }
 
     $res = Show-Dialog $d $owner
@@ -2408,7 +3336,9 @@ function Show-SettingsDialog($owner) {
         $st.Corner = $cornerValues[$corner.SelectedIndex]
         $st.Monitor = $screen.SelectedIndex
         $st.ShowWelcome = [bool]$splashOn.Checked
+        $st.CheckUpdates = [bool]$updOn.Checked
         Save-Settings
+        if ($st.CheckUpdates) { Start-UpdateCheck }
         try {
             if ($startup.Checked -and -not (Test-StartupLink)) { Install-StartupLink }
             elseif (-not $startup.Checked -and (Test-StartupLink)) { Remove-StartupLink }
@@ -2436,7 +3366,7 @@ function Update-Banner {
     if (-not $script:sw -or $script:sw.IsDisposed) { return }
     $c = $script:swc
     if ((Get-Date) -lt $script:pauseUntil) {
-        $c.Banner.BackColor = Get-Tint ([System.Drawing.Color]::DimGray) 0.85
+        $c.Banner.BackColor = Get-Soft ([System.Drawing.Color]::DimGray) 0.85
         $c.BannerBar.BackColor = [System.Drawing.Color]::DimGray
         $c.BannerText.Text = 'Paused until ' + $script:pauseUntil.ToString('HH:mm') + '. Right-click the bell > Resume to continue.'
         return
@@ -2444,14 +3374,14 @@ function Update-Banner {
     $n = Get-Next
     if ($n) {
         $col = To-Color $n.Colour
-        $c.Banner.BackColor = Get-Tint $col 0.86
+        $c.Banner.BackColor = Get-Soft $col 0.86
         $c.BannerBar.BackColor = $col
         $what = if ($n.Kind -eq 'notice') { "Notice: $($n.Title) at $($n.EventTime)" } else { $n.Title }
         $from = if ($n.IsMine) { Get-MineName } else { $n.Source }
         $day = if ($n.At.Date -ne (Get-Date).Date) { 'tomorrow ' } else { '' }
         $c.BannerText.Text = "Next up:  $day$($n.Time)   $what    ($(Format-Until $n.At), $from)"
     } else {
-        $c.Banner.BackColor = Get-Tint $Accent 0.9
+        $c.Banner.BackColor = Get-Soft $Accent 0.9
         $c.BannerBar.BackColor = $Accent
         $c.BannerText.Text = 'Nothing coming up in the next 24 hours.'
     }
@@ -2485,8 +3415,8 @@ function Refresh-ScheduleWindow([switch]$Tick) {
             $b.BackColor = $Accent; $b.ForeColor = [System.Drawing.Color]::White
             $b.FlatAppearance.BorderColor = $Accent
         } else {
-            $b.BackColor = [System.Drawing.SystemColors]::Control; $b.ForeColor = [System.Drawing.SystemColors]::ControlText
-            $b.FlatAppearance.BorderColor = [System.Drawing.SystemColors]::ControlText
+            $b.BackColor = $script:P.Raised; $b.ForeColor = $script:P.Text
+            $b.FlatAppearance.BorderColor = $script:P.Border
         }
         $b.Font = if ($d -eq $today) { $BoldFont } else { $UiFont }
         $b.Invalidate()
@@ -2519,11 +3449,11 @@ function Refresh-ScheduleWindow([switch]$Tick) {
     }
     $c.List.BeginUpdate()
     $c.List.Items.Clear()
-    $grey = [System.Drawing.Color]::FromArgb(160, 160, 160)
+    $grey = $script:P.Grey
     $firstUpcoming = $null
     foreach ($e in $entries) {
         $isDone = $isToday -and ($e.At.AddMinutes(1) -le $now)
-        $col = if ($isDone) { $grey } else { To-Color $e.Colour }
+        $col = if ($isDone) { $grey } else { To-TextColor (To-Color $e.Colour) }
         $active = $e.AlertState -ne 'off'      # 'off' = another group's event you didn't ask for
         $it = New-Object System.Windows.Forms.ListViewItem('')
         $it.ImageKey = $e.AlertState
@@ -2539,7 +3469,7 @@ function Refresh-ScheduleWindow([switch]$Tick) {
         $forText = if (@($e.For).Count -eq 0) { $(if ($e.IsMine) { '' } else { 'Everyone' }) }
                    else { (@($e.For) -join ', ') + $(if ($e.ForMe) { '' } elseif ($e.AlertState -eq 'shout') { ' (you too)' } else { ' (not you)' }) }
         $fs = $it.SubItems.Add($forText)
-        $fs.ForeColor = if ($active) { [System.Drawing.SystemColors]::ControlText } else { $grey }
+        $fs.ForeColor = if ($active) { $script:P.Text } else { $grey }
         $ns = $it.SubItems.Add($(if ($e.Notice -gt 0) { "$($e.Notice) min before" } else { '' }))
         if (-not $active) { $ns.ForeColor = $grey }
         $ss = $it.SubItems.Add($(if ($e.IsMine) { Get-MineName } elseif ($e.Owned) { "$($e.Source) (yours)" } else { $e.Source }))
@@ -2547,7 +3477,7 @@ function Refresh-ScheduleWindow([switch]$Tick) {
         $rep = if ($e.OneOff) { 'This day only' } else { "$($e.DaysText), $($e.TimeText)" }
         if (-not $e.IsMine -and $e.TzText) { $rep += " ($($e.TzText))" }
         $s = $it.SubItems.Add($rep)
-        $s.ForeColor = if ($isDone) { $grey } else { [System.Drawing.Color]::DimGray }
+        $s.ForeColor = if ($isDone) { $grey } else { $script:P.Dim }
         if ($isDone) {
             foreach ($sub in $it.SubItems) { $sub.ForeColor = $grey }
             $t.Font = $UiFont
@@ -2563,7 +3493,7 @@ function Refresh-ScheduleWindow([switch]$Tick) {
                elseif ($isToday -and $doneCount -gt 0) { "Nothing left for today. Untick ""Hide what's done"" to see the $doneCount earlier one(s)." }
                else { 'No reminders on this day' }
         [void]$it.SubItems.Add($msg)
-        $it.ForeColor = [System.Drawing.Color]::Gray
+        $it.ForeColor = $script:P.Faint
         [void]$c.List.Items.Add($it)
     }
     $c.List.EndUpdate()
@@ -2580,13 +3510,13 @@ function Refresh-ScheduleWindow([switch]$Tick) {
     } catch {}
 
     if ($script:refreshError) {
-        $c.Status.ForeColor = [System.Drawing.Color]::Firebrick
+        $c.Status.ForeColor = $script:P.Error
         $c.Status.Text = 'Could not show this week: ' + $script:refreshError
     } elseif ($script:errors.Count -gt 0) {
-        $c.Status.ForeColor = [System.Drawing.Color]::Firebrick
+        $c.Status.ForeColor = $script:P.Error
         $c.Status.Text = "$($script:errors.Count) row(s) have a problem and are ignored. First: " + $script:errors[0]
     } else {
-        $c.Status.ForeColor = [System.Drawing.Color]::DimGray
+        $c.Status.ForeColor = $script:P.Dim
         $c.Status.Text = if ($script:settings.Quiet.On) { "Quiet hours $($script:settings.Quiet.From)-$($script:settings.Quiet.To)" } else { '' }
     }
     $canUndo = [bool]$script:undo
@@ -2630,9 +3560,9 @@ function Update-DatePicker {
             $b.FlatAppearance.BorderColor = $Accent; $b.FlatAppearance.BorderSize = 1
             $b.Font = $BoldFont
         } else {
-            $b.BackColor = [System.Drawing.Color]::White
-            $b.ForeColor = if ($d -eq $today) { $Accent } elseif ($inMonth) { [System.Drawing.Color]::FromArgb(30, 30, 30) } else { [System.Drawing.Color]::FromArgb(185, 185, 185) }
-            $b.FlatAppearance.BorderColor = $Accent
+            $b.BackColor = $script:P.Surface
+            $b.ForeColor = if ($d -eq $today) { To-TextColor $Accent } elseif ($inMonth) { $script:P.DayText } else { $script:P.OtherMonth }
+            $b.FlatAppearance.BorderColor = To-TextColor $Accent
             $b.FlatAppearance.BorderSize = $(if ($d -eq $today) { 2 } else { 0 })
             $b.Font = if ($d -eq $today) { $BoldFont } else { $UiFont }
         }
@@ -2668,7 +3598,7 @@ function Invoke-TypedDate {
     $d = ConvertFrom-TypedDate $p.Typed.Text
     if (-not $d) {
         $p.TypedHint.Text = "Can't read that date. Try 24-12-2026 or 24 dec 2026."
-        $p.TypedHint.ForeColor = [System.Drawing.Color]::Firebrick
+        $p.TypedHint.ForeColor = $script:P.Error
         return
     }
     $p.Drop.Close()
@@ -2685,7 +3615,7 @@ function Show-DatePicker($anchor) {
         $cell = 46; $pad = 12
         $W = $pad * 2 + 7 * $cell
         $panel = New-Object System.Windows.Forms.Panel
-        $panel.BackColor = [System.Drawing.Color]::White
+        $panel.BackColor = $script:P.Surface
         $panel.Size = New-Object System.Drawing.Size($W, 400)
         $p = @{ Panel = $panel; Days = @() }
 
@@ -2694,7 +3624,9 @@ function Show-DatePicker($anchor) {
         foreach ($nav in @($back, $fwd)) {
             $nav.Font = New-Object System.Drawing.Font('Segoe UI', 16, [System.Drawing.FontStyle]::Bold)
             $nav.FlatStyle = 'Flat'; $nav.FlatAppearance.BorderSize = 0
-            $nav.ForeColor = $Accent
+            $nav.ForeColor = To-TextColor $Accent
+            $nav.BackColor = $script:P.Surface
+            $nav.FlatAppearance.MouseOverBackColor = $script:P.Hover
             $nav.Cursor = [System.Windows.Forms.Cursors]::Hand
         }
         $back.Add_Click({ Move-DatePicker -1 })
@@ -2710,7 +3642,7 @@ function Show-DatePicker($anchor) {
             $l = New-Object System.Windows.Forms.Label
             $l.Text = $names[$i]
             $l.Font = $SmallBold
-            $l.ForeColor = [System.Drawing.Color]::Gray
+            $l.ForeColor = $script:P.Faint
             $l.TextAlign = 'MiddleCenter'
             $l.SetBounds(($pad + $i * $cell), 54, $cell, 22)
             $panel.Controls.Add($l)
@@ -2718,7 +3650,7 @@ function Show-DatePicker($anchor) {
         for ($i = 0; $i -lt 42; $i++) {
             $b = New-Object System.Windows.Forms.Button
             $b.FlatStyle = 'Flat'
-            $b.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(228, 236, 247)
+            $b.FlatAppearance.MouseOverBackColor = $script:P.Hover
             $b.SetBounds(($pad + ($i % 7) * $cell + 2), (80 + [math]::Floor($i / 7) * 42), ($cell - 4), 38)
             $b.Cursor = [System.Windows.Forms.Cursors]::Hand
             $b.Add_Click({
@@ -2749,6 +3681,7 @@ function Show-DatePicker($anchor) {
             $ctl.Add_MouseWheel({ if ($_.Delta -gt 0) { Move-DatePicker -1 } else { Move-DatePicker 1 } })
         }
 
+        Set-Theme $panel
         $hostCtl = New-Object System.Windows.Forms.ToolStripControlHost($panel)
         $hostCtl.Margin = New-Object System.Windows.Forms.Padding(0)
         $hostCtl.Padding = New-Object System.Windows.Forms.Padding(0)
@@ -2763,7 +3696,7 @@ function Show-DatePicker($anchor) {
     $script:dp.Month = New-Object DateTime($script:selDay.Year, $script:selDay.Month, 1)
     $script:dp.Typed.Text = ''
     $script:dp.TypedHint.Text = 'Or type a date, e.g. 24-12-2026 or 24 dec'
-    $script:dp.TypedHint.ForeColor = [System.Drawing.Color]::Gray
+    $script:dp.TypedHint.ForeColor = $script:P.Faint
     Update-DatePicker
     $script:dp.Drop.Show($anchor, 0, $anchor.Height)
 }
@@ -2821,7 +3754,7 @@ function Open-ScheduleWindow {
     $side = New-Object System.Windows.Forms.Panel
     $side.SetBounds(12, $y0, 236, $sideH)
     $side.Anchor = 'Top, Bottom, Left'
-    $side.BackColor = [System.Drawing.Color]::White
+    $side.BackColor = $script:P.Surface
     $side.BorderStyle = 'FixedSingle'
     $sideTitle = New-Object System.Windows.Forms.Label
     $sideTitle.Text = 'Schedules'
@@ -2832,12 +3765,12 @@ function Open-ScheduleWindow {
     $script:sideTip.SetToolTip($tpl, 'Ready-made reminders you can adjust: water, moving, eye breaks, meals, bedtime')
     $imp = New-Btn 'Import' 10 40 104 36
     $imp.Font = $BoldFont
-    $imp.Add_Click({ Import-SharedSchedule $script:sw })
-    $script:sideTip.SetToolTip($imp, 'Add a schedule file someone shared with you (e.g. from Discord)')
+    $imp.Add_Click({ Show-ImportMenu $this })
+    $script:sideTip.SetToolTip($imp, 'Add a schedule someone shared: a file, a link (stays up to date) or a file in a synced folder')
     $exp = New-Btn 'Export' 120 40 104 36
     $exp.Font = $BoldFont
     $exp.Add_Click({ Export-SharedSchedule $this })
-    $script:sideTip.SetToolTip($exp, 'Save a shared schedule you made as a file to post for your members')
+    $script:sideTip.SetToolTip($exp, 'Share a schedule you made: as a file, kept up to date in a synced folder, or as a link')
     $c.Cards = New-Object System.Windows.Forms.FlowLayoutPanel
     $c.Cards.SetBounds(0, 84, 234, ($sideH - 84 - 96))
     $c.Cards.Anchor = 'Top, Bottom, Left'
@@ -2846,7 +3779,7 @@ function Open-ScheduleWindow {
     $c.Cards.AutoScroll = $true
     $sep = New-Object System.Windows.Forms.Panel
     $sep.SetBounds(10, ($sideH - 92), 214, 1)
-    $sep.BackColor = [System.Drawing.Color]::Gainsboro
+    $sep.BackColor = $script:P.Divider
     $sep.Anchor = 'Bottom, Left'
     $c.SideOptions = New-Btn 'Options' 10 ($sideH - 84) 104 32
     $c.SideOptions.Anchor = 'Bottom, Left'
@@ -2915,7 +3848,7 @@ function Open-ScheduleWindow {
     $c.Heading.SetBounds($x0, $y, 600, 24)
     $c.HidePast = New-Object System.Windows.Forms.CheckBox
     $c.HidePast.Text = "Hide what's done"
-    $c.HidePast.ForeColor = [System.Drawing.Color]::DimGray
+    $c.HidePast.ForeColor = $script:P.Dim
     $c.HidePast.SetBounds(($x0 + $cw - 160), ($y - 2), 160, 26)
     $c.HidePast.Anchor = 'Top, Right'
     $c.HidePast.Add_CheckedChanged({
@@ -2982,7 +3915,7 @@ function Open-ScheduleWindow {
         $lbl = New-Object System.Windows.Forms.Label
         $lbl.Text = $spec[1]
         $lbl.Font = $SmallFont
-        $lbl.ForeColor = [System.Drawing.Color]::DimGray
+        $lbl.ForeColor = $script:P.Dim
         $lbl.SetBounds(($lx + 18), 2, 62, 18)
         $legend.Controls.AddRange(@($pic, $lbl))
         $lx += 84
@@ -2990,7 +3923,7 @@ function Open-ScheduleWindow {
     $hintL = New-Object System.Windows.Forms.Label
     $hintL.Text = '(click the icon to change)'
     $hintL.Font = $SmallFont
-    $hintL.ForeColor = [System.Drawing.Color]::Gray
+    $hintL.ForeColor = $script:P.Faint
     $hintL.SetBounds($lx, 2, (426 - $lx), 18)
     $legend.Controls.Add($hintL)
 
@@ -3017,21 +3950,32 @@ function Open-ScheduleWindow {
     $foot = New-Object System.Windows.Forms.Panel
     $foot.SetBounds(0, ($H - $footH), $W, $footH)
     $foot.Dock = 'Bottom'
-    $foot.BackColor = [System.Drawing.Color]::FromArgb(243, 245, 248)
+    $foot.BackColor = $script:P.Footer
     $hello = New-Object System.Windows.Forms.Label
     $hello.Text = $Greeting
     $hello.Font = $ItalicFont
-    $hello.ForeColor = [System.Drawing.Color]::DimGray
-    $hello.SetBounds(14, 0, 400, $footH)
+    $hello.ForeColor = $script:P.Dim
+    $hello.SetBounds(14, 0, 260, $footH)
     $hello.TextAlign = 'MiddleLeft'
+    # New version notice (only shown when there is one)
+    $c.UpdateLink = New-Object System.Windows.Forms.LinkLabel
+    $c.UpdateLink.Font = $SmallBold
+    $c.UpdateLink.LinkColor = $(if ($script:Dark) { New-Rgb 120 210 140 } else { New-Rgb 30 120 60 })
+    $c.UpdateLink.ActiveLinkColor = $c.UpdateLink.LinkColor
+    $c.UpdateLink.LinkBehavior = 'HoverUnderline'
+    $c.UpdateLink.TextAlign = 'MiddleCenter'
+    $c.UpdateLink.SetBounds(280, 0, ($W - 280 - 540), $footH)
+    $c.UpdateLink.Anchor = 'Top, Left, Right'
+    $c.UpdateLink.Visible = $false
+    $c.UpdateLink.Add_LinkClicked({ Open-Url "$RepoUrl/releases/latest" })
     $free = New-Object System.Windows.Forms.Label
-    $free.Text = 'Free, open source and offline'
+    $free.Text = 'Free, open source and offline - only connects for updates and links you follow'
     $free.Font = $SmallFont
-    $free.ForeColor = [System.Drawing.Color]::Gray
-    $free.SetBounds(($W - 314), 0, 300, $footH)
+    $free.ForeColor = $script:P.Faint
+    $free.SetBounds(($W - 544), 0, 530, $footH)
     $free.TextAlign = 'MiddleRight'
     $free.Anchor = 'Top, Right'
-    $foot.Controls.AddRange(@($hello, $free))
+    $foot.Controls.AddRange(@($hello, $c.UpdateLink, $free))
 
     $f.Controls.AddRange(@($c.Banner, $side, $prev, $c.Week, $todayBtn) + $c.Days + @($c.Heading, $c.HidePast, $c.List, $c.Status, $legend) + $btns + @($foot))
     $f.Controls.Add($ms)
@@ -3041,7 +3985,9 @@ function Open-ScheduleWindow {
     $script:sw = $f
     $script:swc = $c
     if (-not $script:selSource) { $script:selSource = 'schedule.csv' }
+    Set-Theme $f
     Set-Week (Get-Date) (Get-Date)
+    Update-UpdateNotice
     $f.Show()
     $f.Activate()
 }
@@ -3061,7 +4007,7 @@ function Show-Splash {
     $f.StartPosition = 'CenterScreen'
     $f.ShowInTaskbar = $false
     $f.TopMost = $true
-    $f.BackColor = [System.Drawing.Color]::White
+    $f.BackColor = $script:P.Surface
     $f.ClientSize = New-Object System.Drawing.Size($W, $H)
     $f.Opacity = 0
     if ($script:appIcon) { $f.Icon = $script:appIcon }
@@ -3089,21 +4035,21 @@ function Show-Splash {
     $title = New-Object System.Windows.Forms.Label
     $title.Text = "Welcome to Desk Reminders $AppVersion"
     $title.Font = New-Object System.Drawing.Font('Segoe UI', 16, [System.Drawing.FontStyle]::Bold)
-    $title.ForeColor = $Accent
+    $title.ForeColor = To-TextColor $Accent
     $title.TextAlign = 'MiddleCenter'
     $title.SetBounds(0, 134, $W, 40)
 
     $hello = New-Object System.Windows.Forms.Label
     $hello.Text = $Greeting
     $hello.Font = $ItalicFont
-    $hello.ForeColor = [System.Drawing.Color]::DimGray
+    $hello.ForeColor = $script:P.Dim
     $hello.TextAlign = 'MiddleCenter'
     $hello.SetBounds(0, 176, $W, 24)
 
     # Progress line that fills up over 3 seconds
     $track = New-Object System.Windows.Forms.Panel
     $track.SetBounds(90, 222, ($W - 180), 4)
-    $track.BackColor = [System.Drawing.Color]::FromArgb(226, 232, 240)
+    $track.BackColor = $script:P.Track
     $fill = New-Object System.Windows.Forms.Panel
     $fill.SetBounds(0, 0, 0, 4)
     $fill.BackColor = $Accent
@@ -3112,8 +4058,8 @@ function Show-Splash {
     $foot = New-Object System.Windows.Forms.Label
     $foot.Text = 'Free, open source and offline'
     $foot.Font = $SmallFont
-    $foot.ForeColor = [System.Drawing.Color]::Gray
-    $foot.BackColor = [System.Drawing.Color]::FromArgb(243, 245, 248)
+    $foot.ForeColor = $script:P.Faint
+    $foot.BackColor = $script:P.Footer
     $foot.TextAlign = 'MiddleCenter'
     $foot.SetBounds(0, ($H - 40), $W, 40)
 
@@ -3198,6 +4144,10 @@ $tray.ContextMenuStrip = $menu
 $clock = New-Object System.Windows.Forms.Timer
 $clock.Interval = 10000
 $clock.Add_Tick({
+    Receive-LinkChecks
+    Update-FileLinks
+    Start-LinkChecks
+    Start-UpdateCheck
     Sync-Schedule
     $now = Get-Date
     Update-TrayText
@@ -3231,8 +4181,12 @@ $clock.Add_Tick({
 })
 
 Sync-Schedule -Force
+Set-MenuTheme $menu
 $clock.Start()
 Update-TrayText
+# Followed links: check right away in the background, then every $LinkMinutes minutes
+Start-LinkChecks -Force
+Start-UpdateCheck
 
 $firstRun = (-not $script:settings.Welcomed) -and @($script:loaded.Mine.Rows).Count -eq 0 -and @($script:loaded.All).Count -le 1
 if ($script:settings.ShowWelcome -or $firstRun) {

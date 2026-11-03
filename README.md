@@ -33,7 +33,8 @@
 - **One clear window**: your schedules on the left, your week on the right, a *Next up* bar
   and no files to edit.
 - **Soft sounds of its own**: Soft chime, Warm bell, Marimba, Kalimba, Glass, Music box, Rising,
-  Soft ping and Water drop. Or use your own `.wav`.
+  Soft ping and Water drop, with a volume slider. Or use your own `.wav`, and give each schedule
+  its own sound (raid night can sound different from *Drink water*).
 - **Ready-made templates** to start fast: hydration, moving, eye breaks, meals, bedtime.
   Pick one and adjust the interval, times or glass size to how you like it.
 - **Repeating reminders**, like "every 60 minutes from 10:00 to 17:00, on weekdays".
@@ -41,6 +42,11 @@
 - **Notices**: get a heads-up a few minutes before something starts ("Raid night in 30 minutes").
 - **Shared schedules for guilds and communities**: import your guild's events next to your own
   reminders. Times are converted to your local time, and your own schedule is never touched.
+- **Stays up to date by itself**: follow a link (e.g. a GitHub Gist) or a file in a synced
+  folder (OneDrive, Google Drive, Dropbox). When the organiser changes something, you get it
+  automatically, with a short "what changed for you".
+- **Calendar links**: follow a Google Calendar, Outlook or any `.ics` calendar and get pop-ups for
+  its events.
 - **Groups**, e.g. five raid teams in one guild schedule: everyone sees every event, but you
   only get pop-ups for your own team and for guild-wide events.
 - **The bell and the megaphone**: mute any single event with one click, or get another group's
@@ -49,8 +55,10 @@
   one purple, and so on. Change any of them.
 - **Quiet hours**, with a choice per schedule whether it may still come through.
 - **Undo**, **backup and restore**, and **Start with Windows** in one click.
+- **Tells you when a new version is out** (once a day; you can turn it off).
 - **Tiny and transparent**: one PowerShell script you can read. No installer, no account,
-  no internet connection, no data collected. Free, open source and offline.
+  no data collected. Free, open source and offline: it only connects for updates and the links
+  you choose to follow.
 
 ## Download and install
 
@@ -98,7 +106,8 @@ The window has two parts:
 | Mute one reminder | Click the 🔔 bell in the **Alert** column → it becomes 🔕 (that day, or every time). Click again to undo. |
 | Changed your mind | **Undo** (or Ctrl+Z) takes back the last change. |
 | Get a heads-up first | Set **Notice** to e.g. 15 minutes when adding a reminder. |
-| Rename your schedule or change a colour | Select the schedule on the left → **Options** |
+| Rename your schedule, change a colour or a schedule's sound | Select the schedule on the left → **Options** |
+| Follow a guild schedule or calendar | **Import** → *From a link* (stays up to date) or *Linked file in a synced folder* |
 | Start over | Select your own schedule → **Remove** empties it (Undo brings it back). For a shared schedule, **Remove** takes it off your PC. |
 | Not now | Click **Snooze 5 min** or **Snooze 15 min** on the pop-up. |
 | No pop-ups at night | **Settings** → Quiet hours. Each schedule can still be let through (**Options**). |
@@ -128,7 +137,7 @@ Full format: **[docs/schedule-format.md](docs/schedule-format.md)**
 
 ## Shared schedules (guilds and communities)
 
-One person makes the group's schedule in the app, everyone imports it:
+One person makes the group's schedule in the app, everyone else follows it:
 
 1. **Organiser:** click **+ New shared schedule** (bottom left). Give it a name, pick the group's
    time zone ("server time") and, if you like, list your groups (e.g. *Raid Team 1* to
@@ -136,9 +145,18 @@ One person makes the group's schedule in the app, everyone imports it:
 2. Add more events with **Add reminder** and choose the schedule under **Add to** (it's picked
    for you when that schedule is selected on the left). If the schedule has groups, tick who the
    event is **For**: *Everyone*, or one or more groups.
-3. Click **Export** (top left). That saves a ready-to-post file; post it in Discord (or send it
-   any way you like).
-4. **Members:** click **Import** (top left), pick the file and tick your group(s).
+3. Click **Export** (top left) and pick how to share it:
+
+   | Export | Members click **Import** → | Updates |
+   |---|---|---|
+   | **Copy for a link (GitHub Gist)**: paste it into a free Gist, post the Gist's link | **From a link** | Automatic: checked every 20 minutes |
+   | **Keep a copy updated in a folder**: a synced folder (OneDrive, Google Drive, Dropbox) | **Linked file in a synced folder** | Automatic: within seconds |
+   | **Save a copy as a file**: post the file in Discord | **From a file** | By hand: export and import again |
+
+4. **Members:** after importing, tick your group(s).
+
+Already have a Google Calendar, Outlook calendar or other `.ics` calendar for your guild?
+Members can follow it directly: **Import → From a link** and paste the calendar's iCal address.
 
 Members see **every** event, so everyone knows what the guild is doing. Events for other groups
 are greyed out and marked *(not you)*, and only events for *Everyone* and for your own groups pop up.
@@ -153,8 +171,8 @@ Exceptions are one click, right in the list:
 Select the schedule on the left → **Options** to change your groups, its colour and whether it may
 pop up during quiet hours. The checkbox on a schedule turns it on or off.
 
-Changed something? **Export** again and post the new file. Members import it, and the app
-tells them which version they had and which one they're getting.
+Changed something? With a link or a synced folder, members get it automatically and see what
+changed for them (*"2 new events, 1 for you"*). With a plain file, **Export** again and post it.
 
 Shared events show up next to your own, converted to your local time. Your `schedule.csv` is never
 changed. Don't want a particular guild event? Select it in the list → **Remove** hides it for you
@@ -183,12 +201,19 @@ Nothing else is left on your PC.
 
 ## Privacy
 
-Desk Reminders works completely offline, including shared schedules: you import them as files,
-the app never downloads anything. It doesn't connect to the internet, collect data
-or write anywhere except its own folder (and one shortcut in your Startup folder if you
-choose Start with Windows). The only links in the app are under **GitHub** in the menu bar; they
-open a page in your browser when you click them. Backups are saved only where you choose and
-contain your own reminders, so keep them to yourself.
+Desk Reminders works offline. Your reminders, groups, mutes and settings never leave your PC.
+It only goes online in two cases:
+
+- **Links you choose to follow** (Import → From a link): it downloads that file or calendar every
+  20 minutes. Nothing about you is sent; the site only sees an ordinary download, like opening
+  a web page.
+- **The new-version check**: once a day it asks GitHub for the latest version number. Turn it off
+  in **Settings → Updates**.
+
+It doesn't collect data or write anywhere except its own folder (and one shortcut in your Startup
+folder if you choose Start with Windows, and a folder you pick for *Keep a copy updated*). The
+links under **GitHub** in the menu bar open a page in your browser. Backups are saved only where
+you choose and contain your own reminders, so keep them to yourself.
 
 ## Found a bug or have an idea?
 
