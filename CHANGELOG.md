@@ -5,6 +5,40 @@ Versions follow [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-06
+
+### Changed
+- **A new, modern look.** The main window was redesigned:
+  - **Your day like a calendar's day view**: hours down the left, each reminder a quiet line with
+    its title in the schedule's colour (no boxes, no bold), a red line for *now*, and busy hours grow so nothing overlaps. Group
+    names (e.g. *Raid 1*) show on the right.
+  - **An always-visible month calendar** on the left, and a box to type a date (e.g. `24 dec`).
+  - **Schedules with on/off switches**, and a **⋯** button for Options, Export and Remove.
+  - **A colourful Next up card** in the schedule's colour, and rounded buttons throughout.
+  - **Little icons** for each reminder, picked from its words (a drop for water, an eye for eye
+    breaks, cutlery for meals, swords for raids, a moon for bedtime...), also on the pop-up.
+  - **How much of today is done**: "9 of 23 done" with a slim bar under the date.
+  - **New reminder**, **Templates**, **GitHub**, **Settings** and **Undo** in one top bar (the
+    old menu bar is gone).
+- **New pop-ups**: a white card with rounded corners, the schedule's colour, rounded *Snooze* and
+  *Done* buttons and a thin line that shows how long until it closes by itself. When several
+  reminders come at once, each has its own bell to mute it.
+- **A new font: Albert Sans** (free, SIL Open Font License), built in, so everyone sees the same
+  look. No bold anywhere: headings are just a little larger.
+
+- **Opening**: no more start screen. The window opens right away with a short fade-in and comes to
+  the front (it used to only flash in the taskbar). Templates no longer open by themselves: an
+  empty day offers *Start from a template* and *New reminder* instead.
+- **Starting with Windows** puts it quietly in the tray; Settings can open the window then too.
+  Starting it again while it runs opens its window.
+
+### Added
+- Double-click a time on the timeline to add a reminder at that time; right-click a reminder for
+  Edit, Remove and Mute.
+- **Another font**: put a `.ttf` / `.otf` file in a `fonts` folder next to the app and the whole
+  app uses it instead (only for Desk Reminders; nothing is installed).
+- Keys: **Ctrl+N** new reminder, **Alt+←/→** previous/next day (Delete and Ctrl+Z as before).
+
 ## [1.1.0] - 2026-11-03
 
 ### Added
@@ -63,6 +97,7 @@ First public release.
 - A short animated welcome screen, then the main window opens by itself.
 - Everything stays on your PC: free, open source and offline.
 
-[Unreleased]: https://github.com/7ab9ne3021sn4b/DeskReminders/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/7ab9ne3021sn4b/DeskReminders/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/7ab9ne3021sn4b/DeskReminders/releases/tag/v1.2.0
 [1.1.0]: https://github.com/7ab9ne3021sn4b/DeskReminders/releases/tag/v1.1.0
 [1.0.0]: https://github.com/7ab9ne3021sn4b/DeskReminders/releases/tag/v1.0.0

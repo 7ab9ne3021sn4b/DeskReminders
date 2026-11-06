@@ -41,10 +41,10 @@ in the volume mixer.
 - Is it during your **quiet hours** (Settings)? Only schedules allowed through during quiet
   hours pop up then. Your own reminders are not allowed through unless you tick that box.
 - Is it a shared event for another group? Those are greyed out with *(not you)* and don't pop
-  up. Pick your groups: select the schedule on the left → **Options**
+  up. Pick your groups: click **⋯** on the schedule on the left → **Options**
 - Is it muted? A crossed-out bell 🔕 in front of the time means no pop-up; click it to turn it
   back on.
-- Is the schedule turned off? Its checkbox in the **Schedules** list must be ticked.
+- Is the schedule turned off? Its switch in the **Schedules** list must be on (blue).
 - Reminders only fire while the PC is on and awake. Missed ones aren't shown later.
 - Check that the Windows clock and time zone are right.
 
@@ -66,7 +66,7 @@ the classic Windows console, which can be hidden; Windows Terminal can't hide it
 A black window may flash for a moment while it starts; that's normal.
 
 ### A followed link says "link problem"
-Select the schedule → **Options** to see what went wrong, then **Check now**.
+Click **⋯** on the schedule → **Options** to see what went wrong, then **Check now**.
 - *Doesn't contain a schedule or a calendar / looks like a web page*: you pasted the page, not the
   file. For a GitHub Gist the app fixes this itself; for other sites use the "Raw" or "Download"
   link. For Google Calendar use the **Secret address in iCal format**, not the normal share link.
@@ -82,8 +82,8 @@ on this PC. The card shows *link problem* if the file is missing.
 **Settings → Pop-ups**: pick the corner and screen, click **Test**, then **Save**.
 
 ### I removed something by mistake
-Click **Undo** in the main window (or press Ctrl+Z in the list). It takes back the last
-change. Hidden shared events can also be brought back: select the schedule → **Options** → *Show the hidden events again*.
+Click **Undo** in the main window (or press Ctrl+Z). It takes back the last
+change. Hidden shared events can also be brought back: click **⋯** on the schedule → **Options** → *Show the hidden events again*.
 
 ### A shared event shows at the wrong time
 Check the `#! timezone = …` line in the shared file (see

@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/media/main-window.png" width="760" alt="The main window: your schedules on the left, your week and reminders on the right">
+  <img src="docs/media/main-window.png" width="760" alt="The main window: the month and your schedules on the left, your day as a timeline on the right">
 </p>
 
 <p align="center">
@@ -30,8 +30,8 @@
 - **Pop-ups at the times you choose**, in the corner and on the screen you pick, with a soft chime.
 - **Never steals focus.** Your keypresses keep going to the game or app you're in.
 - **Closes by itself after 25 seconds**, or **snooze** it for 5 or 15 minutes.
-- **One clear window**: your schedules on the left, your week on the right, a *Next up* bar
-  and no files to edit.
+- **One clear window**: a month calendar and your schedules on the left, your day as a timeline
+  on the right, a *Next up* card and no files to edit.
 - **Soft sounds of its own**: Soft chime, Warm bell, Marimba, Kalimba, Glass, Music box, Rising,
   Soft ping and Water drop, with a volume slider. Or use your own `.wav`, and give each schedule
   its own sound (raid night can sound different from *Drink water*).
@@ -66,7 +66,7 @@
    [latest release](https://github.com/7ab9ne3021sn4b/DeskReminders/releases/latest).
 2. Right-click the zip, choose **Extract All**, and put the folder somewhere permanent,
    like `Documents\DeskReminders`.
-3. Double-click **Start-Reminders.cmd**. After a short welcome the main window opens, and a
+3. Double-click **Start-Reminders.cmd**. The main window opens right away, and a
    blue bell stays in the system tray (bottom right; it may be hidden behind the `^` arrow).
 4. Optional: **Settings** → *Start Desk Reminders when I log in* (or run **Add-To-Startup.cmd**).
 
@@ -78,9 +78,10 @@
 
 ## How to use it
 
-Start it with **Start-Reminders.cmd**. A short welcome animation plays, then the main window opens.
-The first time, Desk Reminders offers a few ready-made templates to start with; pick some or start empty.
-Later, double-click the bell in the tray to open the window again.
+Start it with **Start-Reminders.cmd** and the main window opens. The first time, the empty day
+offers **Start from a template** (water, breaks, meals, bedtime) or **New reminder**. Later,
+double-click the bell in the tray (or start it again) to open the window. When it starts with
+Windows it waits quietly in the tray.
 
 <p align="center">
   <img src="docs/media/add-reminder.png" width="640" alt="The Add reminder window: where to add it, title, text, days, time, notice and who it is for">
@@ -89,34 +90,36 @@ Later, double-click the bell in the tray to open the window again.
 
 The window has two parts:
 
-- **Left: Schedules.** *My schedule* and every shared schedule you have, each in its own colour.
-  **Import** and **Export** sit at the top, **+ New shared schedule** at the bottom.
-  Click a schedule to select it; **Options** sets its colour, your groups and quiet hours.
-- **Right: your week.** The *Next up* bar, the days (coloured dots show which schedules have
-  something that day) and the reminders for the selected day.
+- **Left: the month and your schedules.** A month calendar, a box to type a date, then *My schedule* and every shared schedule
+  you have, each in its own colour, with a switch to turn shared ones on or off. **Import**,
+  **Export** and **New shared schedule** are at the bottom.
+- **Right: your day.** The *Next up* card, then your day like a calendar's day view: hours down
+  the left, each reminder a quiet line with a small icon and its title in the schedule's colour, and a red line for *now*.
+- **Top:** **New reminder**, **Templates**, **GitHub**, **Settings** (the cog) and **Undo**.
 
 | You want to… | Do this |
 |---|---|
-| See what's next | The **Next up** bar at the top. Today's list hides what's already done; untick *Hide what's done* to see it greyed out. |
-| See a day | Click it in the week. **Pick a date** opens a calendar to jump to any date, or type one (e.g. `24-12-2026` or `24 dec`); **Today** jumps back. |
-| Add a reminder | **Add reminder** → where to add it, title, optional text, days, time, notice. |
-| Start from a template | **Templates** (top left, next to *Schedules*) → tick e.g. Hydration, set every how many minutes and how big a glass. |
-| Change a reminder | Select it → **Edit** (or double-click it). |
-| Remove a reminder | Select it → **Remove** (or press Delete). For repeating reminders you choose: only this day, or the whole reminder. |
-| Mute one reminder | Click the 🔔 bell in the **Alert** column → it becomes 🔕 (that day, or every time). Click again to undo. |
+| See what's next | The **Next up** card at the top. What's already done today is greyed out; turn on *Hide what's done* to hide it. |
+| See a day | Click it in the month calendar (the arrows or the mouse wheel change the month), use **‹ Today ›**, or type a date under the calendar (e.g. `24-12-2026` or `24 dec`) and press Enter. |
+| Add a reminder | **New reminder** (or Ctrl+N) → where to add it, title, optional text, days, time, notice. Or double-click a time on the timeline to start at that time. |
+| Start from a template | **Templates** (top right) → tick e.g. Hydration, set every how many minutes and how big a glass. |
+| Change a reminder | Double-click it on the timeline (or right-click → **Edit**). |
+| Remove a reminder | Right-click it → **Remove** (or click it and press Delete). For repeating reminders you choose: only this day, or the whole reminder. |
+| Mute one reminder | Click the 🔔 bell on the reminder → it becomes 🔕 (that day, or every time). Click again to undo. You can also mute from a pop-up when several come at once. |
 | Changed your mind | **Undo** (or Ctrl+Z) takes back the last change. |
+| Use another font | The app uses Albert Sans. Put a `.ttf` or `.otf` file in a folder called `fonts` inside the Desk Reminders folder and restart: the whole app uses it instead (nothing is installed). |
 | Get a heads-up first | Set **Notice** to e.g. 15 minutes when adding a reminder. |
-| Rename your schedule, change a colour or a schedule's sound | Select the schedule on the left → **Options** |
+| Rename your schedule, change a colour or a schedule's sound | Click **⋯** on the schedule (or double-click it) → **Options** |
 | Follow a guild schedule or calendar | **Import** → *From a link* (stays up to date) or *Linked file in a synced folder* |
-| Start over | Select your own schedule → **Remove** empties it (Undo brings it back). For a shared schedule, **Remove** takes it off your PC. |
+| Start over | **⋯** on your own schedule → **Remove all reminders** (Undo brings them back). For a shared schedule, **⋯** → **Remove from this PC**. |
 | Not now | Click **Snooze 5 min** or **Snooze 15 min** on the pop-up. |
-| No pop-ups at night | **Settings** → Quiet hours. Each schedule can still be let through (**Options**). |
+| No pop-ups at night | **Settings** → Quiet hours. Each schedule can still be let through (**⋯** → **Options**). |
 | Pop-ups somewhere else | **Settings** → Pop-ups → corner and screen, then **Test**. |
 | Change the sound | **Settings** → Sound → pick one (you hear it right away) or your own `.wav`, set the **Volume**, or turn it off. |
 | Start with Windows | **Settings** → *Start Desk Reminders when I log in*. |
 | Move to a new PC | **Settings** → **Back up**, then **Restore** on the new PC. |
 | Take a break from reminders | Right-click the bell → **Pause** |
-| Read the guides | **GitHub** in the menu bar: how to use, guides, troubleshooting, what's new. |
+| Read the guides | **GitHub** at the top: how to use, guides, troubleshooting, what's new. |
 
 **In games:** use *windowed* or *borderless fullscreen*. In exclusive fullscreen Windows doesn't
 let any window show on top, but you will still hear the chime.
@@ -142,10 +145,10 @@ One person makes the group's schedule in the app, everyone else follows it:
 1. **Organiser:** click **+ New shared schedule** (bottom left). Give it a name, pick the group's
    time zone ("server time") and, if you like, list your groups (e.g. *Raid Team 1* to
    *Raid Team 5*, one per line). Then add the first event straight away.
-2. Add more events with **Add reminder** and choose the schedule under **Add to** (it's picked
+2. Add more events with **New reminder** and choose the schedule under **Add to** (it's picked
    for you when that schedule is selected on the left). If the schedule has groups, tick who the
    event is **For**: *Everyone*, or one or more groups.
-3. Click **Export** (top left) and pick how to share it:
+3. Click **Export** (bottom left) and pick how to share it:
 
    | Export | Members click **Import** → | Updates |
    |---|---|---|
@@ -161,21 +164,21 @@ Members can follow it directly: **Import → From a link** and paste the calenda
 Members see **every** event, so everyone knows what the guild is doing. Events for other groups
 are greyed out and marked *(not you)*, and only events for *Everyone* and for your own groups pop up.
 
-Exceptions are one click, right in the list:
+Exceptions are one click, right on the timeline:
 
 - 🔔 → 🔕 **Mute**: click the bell of an event you don't need (e.g. you skip Thursday's raid).
-  It stays in the list, without a pop-up. That day only, or every time.
+  It stays on the timeline, without a pop-up. That day only, or every time.
 - 🔕 → 📢 **Notify me too**: click the grey bell of another group's event (e.g. you fill in for
   Raid 2 this week) to get its pop-up anyway.
 - Click again to switch back. When you import an update, the app tells you what changed for you.
-Select the schedule on the left → **Options** to change your groups, its colour and whether it may
-pop up during quiet hours. The checkbox on a schedule turns it on or off.
+Click **⋯** on the schedule → **Options** to change your groups, its colour and whether it may
+pop up during quiet hours. The switch on a schedule turns it on or off.
 
 Changed something? With a link or a synced folder, members get it automatically and see what
 changed for them (*"2 new events, 1 for you"*). With a plain file, **Export** again and post it.
 
 Shared events show up next to your own, converted to your local time. Your `schedule.csv` is never
-changed. Don't want a particular guild event? Select it in the list → **Remove** hides it for you
+changed. Don't want a particular guild event? Right-click it → **Hide** hides it for you
 only (this day, or every time).
 
 A schedule file only contains times and text, so importing one can't run anything on your PC.
@@ -212,7 +215,7 @@ It only goes online in two cases:
 
 It doesn't collect data or write anywhere except its own folder (and one shortcut in your Startup
 folder if you choose Start with Windows, and a folder you pick for *Keep a copy updated*). The
-links under **GitHub** in the menu bar open a page in your browser. Backups are saved only where
+links under **GitHub** at the top open a page in your browser. Backups are saved only where
 you choose and contain your own reminders, so keep them to yourself.
 
 ## Found a bug or have an idea?
@@ -231,3 +234,6 @@ Desk Reminders is free and will stay free. If it helps you, you can buy me a cof
 ## Licence
 
 [MIT](LICENSE): free to use, share and change.
+
+The app's font is [Albert Sans](https://github.com/usted/Albert-Sans) by Andreas Rasmussen, under the
+[SIL Open Font License 1.1](DeskReminders/assets/AlbertSans-OFL.txt).

@@ -61,7 +61,7 @@ so you get one pop-up, not two. (In the full example at the bottom, *Lunch* repl
 
 The colour belongs to the **schedule**, not to each row: your own reminders
 are blue, the first shared schedule is green, the next purple, and so on. Change them in the app:
-select the schedule in the **Schedules** list on the left → **Options**
+click **⋯** on the schedule in the **Schedules** list on the left → **Options**
 
 Colour names (`green`, `red`, …) in this column are ignored. The only value that means
 something here is `skip`.

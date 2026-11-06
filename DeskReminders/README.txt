@@ -1,16 +1,16 @@
 DESK REMINDERS
 ==============
 Pop-up + sound reminders on Windows 10/11, from a schedule you set up yourself.
-Version 1.1.0  -  free, open source (MIT licence) and offline
+Version 1.2.0  -  free, open source (MIT licence) and offline
 Home page, guides, updates and bug reports: https://github.com/7ab9ne3021sn4b/DeskReminders
 
 SET UP
 1. Unzip this folder somewhere permanent, e.g. Documents\DeskReminders.
-2. Double-click Start-Reminders.cmd. A short welcome animation plays, then
-   the main window opens. A blue bell stays in the system tray (bottom
-   right, maybe behind the ^ arrow); double-click it to open the window.
-3. The first time, pick a few ready-made templates (water, moving, meals...)
-   or start empty.
+2. Double-click Start-Reminders.cmd. The main window opens right away.
+   A blue bell stays in the system tray (bottom right, maybe behind the
+   ^ arrow); double-click it to open the window.
+3. The first time, click "Start from a template" (water, moving,
+   meals...) or "New reminder".
 4. Optional: Settings > "Start Desk Reminders when I log in to Windows".
 
 If Windows shows "Windows protected your PC", click More info > Run anyway.
@@ -21,49 +21,59 @@ Your schedule.csv, shared folder and settings.json are not in the download,
 so your reminders and settings stay as they are.
 
 THE MAIN WINDOW
-Left: SCHEDULES - My schedule and every shared schedule, each in its own
-colour.
-- Templates (next to the title): ready-made reminders you can adjust
-  (Hydration: every how many minutes, from/to, glass size; Move; Eye
-  breaks; Meals; Bedtime).
-- Import (top): add a schedule someone shared with you:
-  From a file (a copy), From a link (a Gist or a calendar link like Google
-  Calendar / Outlook .ics; checked every 20 minutes), or Linked file in a
-  synced folder (OneDrive, Google Drive, Dropbox; updates within seconds).
-- Export (top): share a schedule you made: Save a copy as a file, Keep a
-  copy updated in a folder (synced folder; copied after every change), or
-  Copy for a link (paste into a free GitHub Gist and post its link).
-- Click a schedule to select it. Options: its name (your own schedule),
+Top: New reminder (Ctrl+N), Templates (ready-made reminders you can
+adjust: Hydration, Move, Eye breaks, Meals, Bedtime), GitHub (how to
+use, guides, troubleshooting, what's new, report a problem; opens in
+your browser), Settings (the cog) and Undo (Ctrl+Z).
+
+Left: THE MONTH AND YOUR SCHEDULES
+- Month calendar: click a day to see it. The arrows or the mouse wheel
+  change the month. Under it, type a date (e.g. 24-12-2026 or 24 dec)
+  and press Enter.
+- Schedules: My schedule and every shared schedule, each in its own
+  colour. The switch turns a shared schedule on or off. The ... button
+  (or a double-click) opens Options: its name (your own schedule),
   colour, sound, your groups, pop-ups during quiet hours, hidden events,
-  and for followed links: Check now / Stop following. The
-  checkbox turns a shared schedule on or off. Remove: empties your own
-  schedule (Undo brings it back) or takes a shared one off this PC.
-- + New shared schedule (bottom): make one for your guild or team.
-Right: YOUR WEEK
+  and for followed links: Check now / Stop following. The ... menu also
+  has Export and Remove (empties your own schedule - Undo brings it
+  back - or takes a shared one off this PC).
+- Import: add a schedule someone shared with you: From a file (a copy),
+  From a link (a Gist or a calendar link like Google Calendar / Outlook
+  .ics; checked every 20 minutes), or Linked file in a synced folder
+  (OneDrive, Google Drive, Dropbox; updates within seconds).
+- Export: share a schedule you made: Save a copy as a file, Keep a
+  copy updated in a folder (synced folder; copied after every change),
+  or Copy for a link (paste into a free GitHub Gist and post its link).
+- New shared schedule: make one for your guild or team.
+
+Right: YOUR DAY
 - Next up: the next reminder that will pop up for you.
-- Pick a day. Coloured dots show which schedules have something that day.
-  Pick a date opens a calendar to jump to any date, or type one (e.g.
-  24-12-2026 or 24 dec). Today jumps back.
-- Today's list hides what's already done. Untick "Hide what's done" to
-  see those greyed out.
-- Add reminder: where to add it, title, optional text, which days, a
+- < Today >: previous day, today, next day (or Alt+Left / Alt+Right).
+- The day view: hours down the left, every reminder a line with its
+  title in the schedule's colour; a red line shows now. What's already done is greyed out; turn on "Hide
+  what's done" to hide it.
+- Double-click a reminder to edit it, or double-click an empty time to
+  add one there. Right-click a reminder: Edit, Remove (or Delete) and
+  Mute. Removing a shared event only hides it for you.
+- The bell on each reminder: bell = pops up for you; click it to mute
+  that reminder (crossed-out bell), that day only or every time. A grey
+  bell is another group's event: click it to be notified too
+  (megaphone). Click again to switch back.
+- New reminder: where to add it, title, optional text, which days, a
   time (once, or repeating every X minutes between two times), a notice,
   and for shared schedules with groups: who it's For.
-- Alert (the first column): bell = pops up for you; click it to
-  mute that reminder (crossed-out bell), that day only or every time.
-  A grey bell is another group's event: click it to be notified too
-  (megaphone). Click again to switch back.
-- Edit (or double-click), Remove (or Delete), Undo (or Ctrl+Z).
-  Removing a shared event only hides it for you.
-Menu bar: Settings (incl. the new-version check), and GitHub (how to
-use, guides, troubleshooting, what's new, report a problem; opens in
-your browser).
+
+FONT
+The app uses Albert Sans (in the assets folder; SIL Open Font
+License, see assets\AlbertSans-OFL.txt). To use another font, put a
+.ttf or .otf file in a folder called "fonts" inside this folder and
+restart Desk Reminders. Nothing is installed on your PC.
 
 SETTINGS
 Sound (Soft chime, Warm bell, Marimba, Kalimba, Glass, Music box, Rising,
 Soft ping, Water drop, or your own .wav; volume slider; or off), quiet hours (no pop-ups at
 night; each schedule can still be let through under Options), pop-up
-corner and screen, Start with Windows, welcome screen on/off,
+corner and screen, Start with Windows (and whether the window opens then),
 Back up / Restore (one zip with your schedule, shared schedules and
 settings; keep it to yourself).
 

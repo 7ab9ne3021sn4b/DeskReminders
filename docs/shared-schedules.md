@@ -22,7 +22,7 @@ any `.ics` link) directly.
 3. Optional: list your **groups**, one per line (e.g. *Raid Team 1* … *Raid Team 5*, or
    *Tanks*, *Healers*). Leave it empty if everyone should get every event.
 4. Click **Create**. The app asks whether you want to add the first event right away.
-   Later: main window → **Add reminder** → choose your schedule under **Add to**
+   Later: main window → **New reminder** → choose your schedule under **Add to**
    (or pick **+ New shared schedule** there to make another one), then fill in the event as
    usual. **Notice** gives members a heads-up before it starts. If the schedule has groups,
    tick who it's **For**: *Everyone*, or one or more groups.
@@ -75,7 +75,7 @@ member's local time, with a heads-up if the calendar event has a reminder. All-d
 left out. Calendars don't have groups, so everyone gets every event (members can still mute
 single events with the bell).
 
-To change the groups later: select the schedule on the left → **Options** → *Groups*.
+To change the groups later: click **⋯** on the schedule on the left → **Options** → *Groups*.
 As the organiser you get every group's pop-ups by default; untick groups under *My groups*
 in the same window if you don't want that.
 
@@ -115,7 +115,7 @@ Summer and winter time are handled automatically.
 
 ## For members: use it
 
-- **Import:** click **Import** (top of the **Schedules** list in the main window):
+- **Import:** click **Import** (under the **Schedules** list in the main window):
   - **From a link** for a Gist or calendar link: it's checked every 20 minutes. The card shows
     *Link* or *Calendar link*; **Options → Check now** checks right away.
   - **Linked file in a synced folder** for a file in OneDrive / Google Drive / Dropbox: changes
@@ -125,24 +125,24 @@ Summer and winter time are handled automatically.
   The app checks every row first and tells you if anything is wrong.
 - **Pick your group(s):** if the schedule has groups, tick the ones you're in. You see every
   event; events for other groups are greyed out with *(not you)* and don't pop up. Events for
-  *Everyone* and for your groups do. Change it any time: select the schedule on the left → **Options**
+  *Everyone* and for your groups do. Change it any time: click **⋯** on the schedule on the left → **Options**
 - **See it:** guild events appear in the main window in the schedule's colour, with its
   name in the **Schedule** column, and pop-ups show the name (and group) above the title.
-- **Mute or join one event:** click the bell in front of its time in the list. 🔔 pops up for
+- **Mute or join one event:** click the bell on the event in the timeline. 🔔 pops up for
   you → click to mute (🔕), that day only or every time. A grey bell is another group's event →
   click it to be notified too (📢). Click again to switch back. Only you are affected.
-- **Colour and quiet hours:** select the schedule → **Options** sets the schedule's colour and
+- **Colour and quiet hours:** click **⋯** on the schedule → **Options** sets the schedule's colour and
   whether it may pop up during your quiet hours (on by default for shared schedules, so you
   don't miss a raid; set quiet hours in **Settings**).
 - **Update:** links and synced files update by themselves; a short message tells you what changed
   for you (new events for you and for other groups). For a plain file, import the newer one; the
   app shows which version you have and which one you're importing. Your groups, mutes and
   notify-me-toos always stay.
-- **Stop following a link:** select it → **Options** → *Stop following*. You keep the last version
+- **Stop following a link:** click **⋯** on it → **Options** → *Stop following*. You keep the last version
   as a normal copy.
-- **Turn it off for a while:** untick its checkbox in the **Schedules** list.
+- **Turn it off for a while:** turn off its switch in the **Schedules** list.
 - **Skip one event:** select it in the main window → **Remove** → *Only this day* or
-  *Every time*. This only hides it for you. Select the schedule → **Options** → *Show the hidden events again* brings
+  *Every time*. This only hides it for you. Click **⋯** on the schedule → **Options** → *Show the hidden events again* brings
   them back.
 - **Remove it completely:** select it in the **Schedules** list → **Remove**.
 

@@ -8,9 +8,9 @@
 # Check what a day looks like without starting the app:
 #   powershell -ExecutionPolicy Bypass -File DeskReminders.ps1 -ListFor 2026-12-01
 
-param([string]$ListFor, [switch]$InstallStartup, [switch]$RemoveStartup)
+param([string]$ListFor, [switch]$InstallStartup, [switch]$RemoveStartup, [switch]$Startup)   # -Startup: started by Windows at login
 
-$AppVersion   = '1.1.0'
+$AppVersion   = '1.2.0'
 $ScheduleFile = Join-Path $PSScriptRoot 'schedule.csv'
 $TemplateFile = Join-Path $PSScriptRoot 'schedule.template.csv'
 $SharedDir    = Join-Path $PSScriptRoot 'shared'
@@ -355,7 +355,7 @@ function Load-Settings {
     $s = @{
         Sound = 'Soft chime.wav'; SoundOn = $true; Volume = 40; MineName = ''; Disabled = @(); Hidden = @(); Alerts = @(); Owned = @()
         Colors = @{}; MyGroups = @{}; QuietAllow = @{}; Quiet = @{ On = $false; From = '23:00'; To = '08:00' }
-        Corner = 'BottomRight'; Monitor = 0; Welcomed = $false; ShowWelcome = $true; HidePast = $true; ViewOff = @()
+        Corner = 'BottomRight'; Monitor = 0; Welcomed = $false; OpenAtLogin = $false; HidePast = $true; ViewOff = @()
         Links = @{}; Publish = @{}; Sounds = @{}; Theme = 'System'; CheckUpdates = $true; UpdateChecked = ''; LatestSeen = ''
     }
     if (Test-Path -LiteralPath $SettingsFile) {
@@ -377,7 +377,7 @@ function Load-Settings {
             if ($j.Corner) { $s.Corner = [string]$j.Corner }
             if ($null -ne $j.Monitor) { $s.Monitor = [int]$j.Monitor }
             if ($null -ne $j.Welcomed) { $s.Welcomed = [bool]$j.Welcomed }
-            if ($null -ne $j.ShowWelcome) { $s.ShowWelcome = [bool]$j.ShowWelcome }
+            if ($null -ne $j.OpenAtLogin) { $s.OpenAtLogin = [bool]$j.OpenAtLogin }
             if ($null -ne $j.HidePast) { $s.HidePast = [bool]$j.HidePast }
             if ($j.Links) { $lk = ConvertTo-Hash $j.Links; foreach ($k in @($lk.Keys)) { $s.Links[$k] = ConvertTo-Hash $lk[$k] } }
             if ($j.Publish) { $s.Publish = ConvertTo-Hash $j.Publish }
@@ -411,7 +411,7 @@ function Save-Settings {
         Corner     = $st.Corner
         Monitor    = [int]$st.Monitor
         Welcomed   = [bool]$st.Welcomed
-        ShowWelcome = [bool]$st.ShowWelcome
+        OpenAtLogin = [bool]$st.OpenAtLogin
         HidePast   = [bool]$st.HidePast
         Links      = $st.Links
         Publish    = $st.Publish
@@ -473,7 +473,7 @@ function Install-StartupLink {
     # conhost = the classic console, which can be hidden (Windows Terminal can't)
     $ps = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $conhost = Join-Path $env:WINDIR 'System32\conhost.exe'
-    $psArgs = "-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`""
+    $psArgs = "-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`" -Startup"
     if (Test-Path -LiteralPath $conhost) { $sc.TargetPath = $conhost; $sc.Arguments = "`"$ps`" $psArgs" }
     else { $sc.TargetPath = $ps; $sc.Arguments = $psArgs }
     $sc.WorkingDirectory = $PSScriptRoot
@@ -531,6 +531,805 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @"
 using System.Windows.Forms;
 using System.Drawing;
+using System.Collections.Generic;
+// --- Modern look: drawn controls for the main window and the pop-ups ---
+public static class DrUi {
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern System.IntPtr SendMessage(System.IntPtr h, int msg, System.IntPtr w, string l);
+    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+    static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref int value, int size);
+    [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+    static extern System.IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int w, int h);
+
+    public static System.Drawing.Drawing2D.GraphicsPath Round(System.Drawing.RectangleF r, float rad) {
+        System.Drawing.Drawing2D.GraphicsPath p = new System.Drawing.Drawing2D.GraphicsPath();
+        float d = System.Math.Min(rad * 2, System.Math.Min(r.Width, r.Height));
+        if (d < 1) { p.AddRectangle(r); return p; }
+        p.AddArc(r.X, r.Y, d, d, 180, 90);
+        p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        p.CloseFigure();
+        return p;
+    }
+    // k = how much of b (0..1)
+    public static Color Mix(Color a, Color b, double k) {
+        return Color.FromArgb((int)(a.R + (b.R - a.R) * k), (int)(a.G + (b.G - a.G) * k), (int)(a.B + (b.B - a.B) * k));
+    }
+    public static Color Hex(string s) { return ColorTranslator.FromHtml(s); }
+    // A font a bit bigger or smaller. Never bold: headings are just a little larger (cleaner look)
+    public static Font F(Font f, float delta, bool bigger) {
+        return new Font(f.FontFamily, f.Size + delta + (bigger ? 0.5f : 0f), FontStyle.Regular);
+    }
+    [System.Runtime.InteropServices.DllImport("gdi32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern int AddFontResourceEx(string name, uint flags, System.IntPtr reserved);
+    // Lets Windows' own text drawing use a font file for this app only (nothing is installed)
+    public static void LoadFontForGdi(string path) { try { AddFontResourceEx(path, 0x10, System.IntPtr.Zero); } catch { } }
+    public static Color Back(Control p) {
+        if (p == null) { return Color.White; }
+        DrCard c = p as DrCard;
+        if (c != null) { return c.Fill; }
+        return p.BackColor;
+    }
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern System.IntPtr GetForegroundWindow();
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(System.IntPtr h, System.IntPtr pid);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool attach);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool SetForegroundWindow(System.IntPtr h);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool BringWindowToTop(System.IntPtr h);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int pid);
+    // Brings a window you asked for to the front (Windows otherwise may only flash it in the taskbar).
+    // Only used when you open the window yourself, never for pop-ups.
+    public static void ToFront(Form f) {
+        try {
+            System.IntPtr h = f.Handle;
+            uint fg = GetWindowThreadProcessId(GetForegroundWindow(), System.IntPtr.Zero);
+            uint me = GetCurrentThreadId();
+            bool attached = fg != me && AttachThreadInput(fg, me, true);
+            BringWindowToTop(h);
+            SetForegroundWindow(h);
+            if (attached) { AttachThreadInput(fg, me, false); }
+            f.TopMost = true; f.TopMost = false;
+            f.Activate();
+        } catch { }
+    }
+    public static void AllowAnyForeground() { try { AllowSetForegroundWindow(-1); } catch { } }
+    // Grey hint text inside an empty text box
+    public static void Cue(TextBox t, string text) { try { SendMessage(t.Handle, 0x1501, (System.IntPtr)1, text); } catch { } }
+    // Rounded window corners: Windows 11 does it (with its own shadow); otherwise a rounded region
+    public static bool RoundWindow(Form f, int radius) {
+        int v = 2;
+        try { if (DwmSetWindowAttribute(f.Handle, 33, ref v, 4) == 0 && System.Environment.OSVersion.Version.Major >= 6) {
+            Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+            int build = 0;
+            if (k != null) { int.TryParse(System.Convert.ToString(k.GetValue("CurrentBuildNumber")), out build); k.Close(); }
+            if (build >= 22000) { return true; }
+        } } catch { }
+        try { f.Region = Region.FromHrgn(CreateRoundRectRgn(0, 0, f.Width + 1, f.Height + 1, radius * 2, radius * 2)); } catch { }
+        return false;
+    }
+
+    // --- Icons (drawn, so they stay sharp at any size) ---
+    public static void Icon(Graphics g, string kind, RectangleF r, Color ink) {
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        float s = System.Math.Min(r.Width, r.Height) / 24f;
+        float ox = r.X + (r.Width - 24 * s) / 2, oy = r.Y + (r.Height - 24 * s) / 2;
+        using (Pen pen = new Pen(ink, System.Math.Max(1.4f, 2f * s))) {
+            pen.StartCap = System.Drawing.Drawing2D.LineCap.Round; pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+            pen.LineJoin = System.Drawing.Drawing2D.LineJoin.Round;
+            System.Func<float, float> X = delegate(float v) { return ox + v * s; };
+            System.Func<float, float> Y = delegate(float v) { return oy + v * s; };
+            switch (kind) {
+                case "left":  g.DrawLines(pen, new PointF[] { new PointF(X(15), Y(6)), new PointF(X(9), Y(12)), new PointF(X(15), Y(18)) }); break;
+                case "right": g.DrawLines(pen, new PointF[] { new PointF(X(9), Y(6)), new PointF(X(15), Y(12)), new PointF(X(9), Y(18)) }); break;
+                case "down":  g.DrawLines(pen, new PointF[] { new PointF(X(7), Y(10)), new PointF(X(12), Y(15)), new PointF(X(17), Y(10)) }); break;
+                case "plus":  g.DrawLine(pen, X(12), Y(5), X(12), Y(19)); g.DrawLine(pen, X(5), Y(12), X(19), Y(12)); break;
+                case "close": g.DrawLine(pen, X(7), Y(7), X(17), Y(17)); g.DrawLine(pen, X(17), Y(7), X(7), Y(17)); break;
+                case "undo":
+                    g.DrawLines(pen, new PointF[] { new PointF(X(9), Y(5)), new PointF(X(4), Y(10)), new PointF(X(9), Y(15)) });
+                    g.DrawArc(pen, X(4), Y(10) - 0, 16 * s, 10 * s, 270, 180);
+                    g.DrawLine(pen, X(4), Y(10), X(12), Y(10));
+                    break;
+                case "gear":
+                    // A cog: 8 teeth around a ring, with a hole in the middle
+                    PointF[] cog = new PointF[32];
+                    for (int i = 0; i < 32; i++) {
+                        double a = (i / 32.0) * 2 * System.Math.PI - System.Math.PI / 32;
+                        float rr = (i % 4 == 0 || i % 4 == 1) ? 9.2f : 7.0f;
+                        cog[i] = new PointF(X(12 + (float)(rr * System.Math.Cos(a))), Y(12 + (float)(rr * System.Math.Sin(a))));
+                    }
+                    g.DrawPolygon(pen, cog);
+                    g.DrawEllipse(pen, X(9), Y(9), 6 * s, 6 * s);
+                    break;
+                case "more":
+                    using (SolidBrush b = new SolidBrush(ink)) { for (int i = 0; i < 3; i++) { g.FillEllipse(b, X(5.5f + i * 6), Y(10.5f), 3 * s, 3 * s); } }
+                    break;
+                case "calendar":
+                    g.DrawPath(pen, Round(new RectangleF(X(4), Y(5), 16 * s, 15 * s), 2.5f * s));
+                    g.DrawLine(pen, X(4), Y(10), X(20), Y(10)); g.DrawLine(pen, X(8), Y(3), X(8), Y(7)); g.DrawLine(pen, X(16), Y(3), X(16), Y(7));
+                    break;
+                case "templates":
+                    g.DrawPath(pen, Round(new RectangleF(X(4), Y(4), 7 * s, 7 * s), 1.5f * s)); g.DrawPath(pen, Round(new RectangleF(X(13), Y(4), 7 * s, 7 * s), 1.5f * s));
+                    g.DrawPath(pen, Round(new RectangleF(X(4), Y(13), 7 * s, 7 * s), 1.5f * s)); g.DrawPath(pen, Round(new RectangleF(X(13), Y(13), 7 * s, 7 * s), 1.5f * s));
+                    break;
+                case "import":
+                    g.DrawLine(pen, X(12), Y(4), X(12), Y(15));
+                    g.DrawLines(pen, new PointF[] { new PointF(X(7), Y(10)), new PointF(X(12), Y(15)), new PointF(X(17), Y(10)) });
+                    g.DrawLines(pen, new PointF[] { new PointF(X(4), Y(16)), new PointF(X(4), Y(20)), new PointF(X(20), Y(20)), new PointF(X(20), Y(16)) });
+                    break;
+                case "export":
+                    g.DrawLine(pen, X(12), Y(15), X(12), Y(4));
+                    g.DrawLines(pen, new PointF[] { new PointF(X(7), Y(9)), new PointF(X(12), Y(4)), new PointF(X(17), Y(9)) });
+                    g.DrawLines(pen, new PointF[] { new PointF(X(4), Y(16)), new PointF(X(4), Y(20)), new PointF(X(20), Y(20)), new PointF(X(20), Y(16)) });
+                    break;
+                case "code":
+                    g.DrawLines(pen, new PointF[] { new PointF(X(8), Y(7)), new PointF(X(3), Y(12)), new PointF(X(8), Y(17)) });
+                    g.DrawLines(pen, new PointF[] { new PointF(X(16), Y(7)), new PointF(X(21), Y(12)), new PointF(X(16), Y(17)) });
+                    g.DrawLine(pen, X(14), Y(5), X(10), Y(19));
+                    break;
+                case "drop":
+                    System.Drawing.Drawing2D.GraphicsPath dp = new System.Drawing.Drawing2D.GraphicsPath();
+                    dp.AddBezier(X(12), Y(2.8f), X(12), Y(2.8f), X(18), Y(9.2f), X(18), Y(14));
+                    dp.AddArc(X(6), Y(8), 12 * s, 12 * s, 0, 180);
+                    dp.AddBezier(X(6), Y(14), X(6), Y(9.2f), X(12), Y(2.8f), X(12), Y(2.8f));
+                    g.DrawPath(pen, dp); dp.Dispose();
+                    break;
+                case "eye":
+                    g.DrawBezier(pen, X(2), Y(12), X(5.5f), Y(5.5f), X(18.5f), Y(5.5f), X(22), Y(12));
+                    g.DrawBezier(pen, X(2), Y(12), X(5.5f), Y(18.5f), X(18.5f), Y(18.5f), X(22), Y(12));
+                    g.DrawEllipse(pen, X(9), Y(9), 6 * s, 6 * s);
+                    break;
+                case "food":
+                    g.DrawLine(pen, X(6), Y(3), X(6), Y(9)); g.DrawLine(pen, X(10), Y(3), X(10), Y(9));
+                    g.DrawArc(pen, X(6), Y(6), 4 * s, 6 * s, 0, 180);
+                    g.DrawLine(pen, X(8), Y(12), X(8), Y(21));
+                    g.DrawBezier(pen, X(18), Y(3), X(15.5f), Y(4), X(14.5f), Y(8), X(14.5f), Y(12));
+                    g.DrawLine(pen, X(14.5f), Y(12), X(18), Y(12));
+                    g.DrawLine(pen, X(18), Y(3), X(18), Y(21));
+                    break;
+                case "swords":
+                    g.DrawLine(pen, X(4), Y(4), X(15), Y(15)); g.DrawLine(pen, X(20), Y(4), X(9), Y(15));
+                    g.DrawLine(pen, X(12), Y(18.5f), X(18.5f), Y(12)); g.DrawLine(pen, X(5.5f), Y(12), X(12), Y(18.5f));
+                    g.DrawLine(pen, X(16.5f), Y(16.5f), X(20), Y(20)); g.DrawLine(pen, X(7.5f), Y(16.5f), X(4), Y(20));
+                    break;
+                case "moon":
+                    g.DrawArc(pen, X(4), Y(4), 16 * s, 16 * s, 320, 280);
+                    g.DrawBezier(pen, X(18.1f), Y(6.9f), X(14.5f), Y(11.5f), X(9.5f), Y(10), X(8), Y(5.1f));
+                    break;
+                case "move":
+                    g.DrawLines(pen, new PointF[] { new PointF(X(3), Y(12)), new PointF(X(7), Y(12)), new PointF(X(10), Y(5)), new PointF(X(14), Y(19)), new PointF(X(17), Y(12)), new PointF(X(21), Y(12)) });
+                    break;
+                case "pill":
+                    g.DrawPath(pen, Round(new RectangleF(X(3), Y(8.5f), 18 * s, 7 * s), 3.5f * s));
+                    g.DrawLine(pen, X(12), Y(8.5f), X(12), Y(15.5f));
+                    break;
+                case "cup":
+                    g.DrawPath(pen, Round(new RectangleF(X(4), Y(9), 12 * s, 11 * s), 3 * s));
+                    g.DrawArc(pen, X(14), Y(11), 5 * s, 5 * s, -90, 180);
+                    g.DrawLine(pen, X(8), Y(3), X(8), Y(6)); g.DrawLine(pen, X(12), Y(3), X(12), Y(6));
+                    break;
+                case "megaphone":
+                    g.DrawPolygon(pen, new PointF[] { new PointF(X(3), Y(10)), new PointF(X(8), Y(10)), new PointF(X(15), Y(5)), new PointF(X(15), Y(19)), new PointF(X(8), Y(14)), new PointF(X(3), Y(14)) });
+                    g.DrawLine(pen, X(6), Y(14), X(7), Y(19));
+                    g.DrawArc(pen, X(15), Y(8.5f), 5 * s, 7 * s, -60, 120);
+                    break;
+                case "bell": case "bell-off":
+                    System.Drawing.Drawing2D.GraphicsPath bp = new System.Drawing.Drawing2D.GraphicsPath();
+                    bp.AddArc(X(6), Y(3), 12 * s, 12 * s, 180, 180);
+                    bp.AddLine(X(18), Y(9), X(18), Y(14));
+                    bp.AddLine(X(18), Y(14), X(20.5f), Y(17));
+                    bp.AddLine(X(20.5f), Y(17), X(3.5f), Y(17));
+                    bp.AddLine(X(3.5f), Y(17), X(6), Y(14));
+                    bp.CloseFigure();
+                    g.DrawPath(pen, bp); bp.Dispose();
+                    g.DrawArc(pen, X(9.5f), Y(18), 5 * s, 3.5f * s, 0, 180);
+                    if (kind == "bell-off") { g.DrawLine(pen, X(3), Y(3), X(21), Y(21)); }
+                    break;
+            }
+        }
+    }
+}
+
+// A rounded card: children should use the same BackColor as Fill
+public class DrCard : Panel {
+    public int Radius = 12;
+    public Color Fill = Color.White;
+    public Color Border = Color.Empty;
+    public Color Bar = Color.Empty;
+    public DrCard() {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+    }
+    protected override void OnPaintBackground(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        g.Clear(DrUi.Back(Parent));
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        RectangleF r = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+        using (System.Drawing.Drawing2D.GraphicsPath p = DrUi.Round(r, Radius)) {
+            using (SolidBrush b = new SolidBrush(Fill)) { g.FillPath(b, p); }
+            if (Bar != Color.Empty) {
+                Region old = g.Clip;
+                g.SetClip(p);
+                using (SolidBrush b = new SolidBrush(Bar)) { g.FillRectangle(b, 0, 0, 5, Height); }
+                g.Clip = old;
+            }
+            if (Border != Color.Empty) { using (Pen pen = new Pen(Border)) { g.DrawPath(pen, p); } }
+        }
+    }
+}
+
+// Rounded button: Kind = primary, outline, ghost or soft; Icon = one of DrUi.Icon's names
+public class DrButton : Button {
+    public string Kind = "outline";
+    public string IconName = "";
+    public int Radius = 8;
+    public Color Accent = Color.FromArgb(47, 111, 219);
+    public Color Ink = Color.Empty;
+    bool hover, down;
+    public DrButton() {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        FlatStyle = FlatStyle.Flat;
+        FlatAppearance.BorderSize = 0;
+        Cursor = Cursors.Hand;
+        UseVisualStyleBackColor = false;
+    }
+    protected override void OnMouseEnter(System.EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(System.EventArgs e) { hover = false; down = false; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseDown(MouseEventArgs e) { down = true; Invalidate(); base.OnMouseDown(e); }
+    protected override void OnMouseUp(MouseEventArgs e) { down = false; Invalidate(); base.OnMouseUp(e); }
+    protected override void OnEnabledChanged(System.EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        Color back = DrUi.Back(Parent);
+        g.Clear(back);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        Color fill = Color.Empty, border = Color.Empty, ink = DrUi.Hex("#1B1F24");
+        switch (Kind) {
+            case "primary":
+                fill = !Enabled ? DrUi.Mix(Accent, Color.White, 0.55) : down ? DrUi.Mix(Accent, Color.Black, 0.2) : hover ? DrUi.Mix(Accent, Color.Black, 0.1) : Accent;
+                ink = Color.White; break;
+            case "ghost":
+                if (hover && Enabled) { fill = down ? DrUi.Mix(back, Color.Black, 0.1) : DrUi.Mix(back, Color.Black, 0.055); }
+                ink = DrUi.Hex("#3D4652"); break;
+            case "soft":
+                fill = down ? DrUi.Mix(Accent, Color.White, 0.72) : hover ? DrUi.Mix(Accent, Color.White, 0.8) : DrUi.Mix(Accent, Color.White, 0.88);
+                ink = DrUi.Mix(Accent, Color.Black, 0.3); break;
+            default:
+                fill = down ? DrUi.Hex("#E9ECF0") : hover ? DrUi.Hex("#F3F5F8") : Color.White;
+                border = hover ? DrUi.Hex("#C9CFD7") : DrUi.Hex("#DADFE5"); break;
+        }
+        if (Ink != Color.Empty && Kind != "primary") { ink = Ink; }
+        if (!Enabled && Kind != "primary") { ink = DrUi.Hex("#A5ACB6"); }
+        RectangleF r = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+        using (System.Drawing.Drawing2D.GraphicsPath p = DrUi.Round(r, Radius)) {
+            if (fill != Color.Empty) { using (SolidBrush b = new SolidBrush(fill)) { g.FillPath(b, p); } }
+            if (border != Color.Empty) { using (Pen pen = new Pen(border)) { g.DrawPath(pen, p); } }
+            if (Focused && ShowFocusCues) { using (Pen pen = new Pen(DrUi.Mix(Accent, Color.White, 0.3), 1.6f)) { g.DrawPath(pen, p); } }
+        }
+        TextFormatFlags tf = TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+        bool hasIcon = IconName != "";
+        bool hasText = Text != "";
+        int iconSize = 18;
+        if (hasIcon && !hasText) {
+            DrUi.Icon(g, IconName, new RectangleF((Width - iconSize) / 2f, (Height - iconSize) / 2f, iconSize, iconSize), ink);
+            return;
+        }
+        Size ts = TextRenderer.MeasureText(g, Text, Font, new Size(9999, Height), tf);
+        int total = ts.Width + (hasIcon ? iconSize + 6 : 0);
+        int x = System.Math.Max(8, (Width - total) / 2);
+        if (hasIcon) {
+            DrUi.Icon(g, IconName, new RectangleF(x, (Height - iconSize) / 2f, iconSize, iconSize), ink);
+            x += iconSize + 6;
+        }
+        TextRenderer.DrawText(g, Text, Font, new Rectangle(x, 0, Width - x - 6, Height), ink, fill == Color.Empty ? back : fill, tf);
+    }
+}
+
+// On/off switch (a CheckBox underneath, so Checked and CheckedChanged work as usual)
+public class DrToggle : CheckBox {
+    public Color Accent = Color.FromArgb(47, 111, 219);
+    public DrToggle() {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        AutoSize = false;
+        Cursor = Cursors.Hand;
+    }
+    protected override void OnCheckedChanged(System.EventArgs e) { Invalidate(); base.OnCheckedChanged(e); }
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        Color back = DrUi.Back(Parent);
+        g.Clear(back);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        RectangleF track = new RectangleF(1, (Height - 20) / 2f, 36, 20);
+        Color tc = Checked ? (Enabled ? Accent : DrUi.Mix(Accent, Color.White, 0.5)) : DrUi.Hex("#C3C9D2");
+        using (System.Drawing.Drawing2D.GraphicsPath p = DrUi.Round(track, 10)) { using (SolidBrush b = new SolidBrush(tc)) { g.FillPath(b, p); } }
+        float kx = Checked ? track.Right - 18 : track.X + 2;
+        using (SolidBrush sh = new SolidBrush(Color.FromArgb(40, 0, 0, 0))) { g.FillEllipse(sh, kx, track.Y + 3, 16, 16); }
+        g.FillEllipse(Brushes.White, kx, track.Y + 2, 16, 16);
+        if (Text != "") {
+            TextRenderer.DrawText(g, Text, Font, new Rectangle(46, 0, Width - 46, Height), ForeColor, back,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        }
+    }
+}
+
+// A small rounded square with an icon in a schedule's colour
+public class DrIconTile : Control {
+    public Color Color1 = Color.FromArgb(47, 111, 219);
+    public string IconName = "bell";
+    public bool Tile = true;
+    public DrIconTile() { SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true); }
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        g.Clear(DrUi.Back(Parent));
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        if (IconName == "dot") { using (SolidBrush b = new SolidBrush(Color1)) { g.FillEllipse(b, 0, 0, Width - 1, Height - 1); } return; }
+        if (Tile) {
+            using (System.Drawing.Drawing2D.GraphicsPath p = DrUi.Round(new RectangleF(0, 0, Width - 1, Height - 1), Width / 3.6f)) {
+                using (SolidBrush b = new SolidBrush(DrUi.Mix(Color1, Color.White, 0.86))) { g.FillPath(b, p); }
+            }
+        }
+        float s = Tile ? Width * 0.5f : Width * 0.85f;
+        DrUi.Icon(g, IconName, new RectangleF((Width - s) / 2, (Height - s) / 2, s, s), Color1);
+    }
+}
+
+// The Next up card: the schedule's colour as a soft gradient, white text and a little icon
+public class DrBanner : Control {
+    public Color Color1 = Color.FromArgb(47, 111, 219);
+    public string Label = "", Title = "", RightText = "", IconName = "bell";
+    public DrBanner() { SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true); }
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        g.Clear(DrUi.Back(Parent));
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        RectangleF r = new RectangleF(0, 0, Width - 1, Height - 1);
+        Color a = DrUi.Mix(Color1, Color.Black, 0.12), b2 = DrUi.Mix(Color1, Color.White, 0.18);
+        using (System.Drawing.Drawing2D.GraphicsPath p = DrUi.Round(r, 16))
+        using (System.Drawing.Drawing2D.LinearGradientBrush br = new System.Drawing.Drawing2D.LinearGradientBrush(new PointF(0, 0), new PointF(Width, Height * 0.6f), a, b2)) {
+            g.FillPath(br, p);
+        }
+        RectangleF tile = new RectangleF(16, (Height - 46) / 2f, 46, 46);
+        using (System.Drawing.Drawing2D.GraphicsPath p = DrUi.Round(tile, 14)) { using (SolidBrush b = new SolidBrush(Color.FromArgb(48, 255, 255, 255))) { g.FillPath(b, p); } }
+        DrUi.Icon(g, IconName, new RectangleF(tile.X + 12, tile.Y + 12, 22, 22), Color.White);
+        Color soft = Color.FromArgb(225, 235, 245);
+        TextFormatFlags one = TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding;
+        int tx = 78;
+        int rw = 0;
+        using (Font small = new Font(Font.FontFamily, Font.Size - 1f))
+        using (Font big = new Font(Font.FontFamily, Font.Size + 3f)) {
+            if (RightText != "") {
+                rw = System.Math.Min(TextRenderer.MeasureText(g, RightText, small, new Size(9999, 30), one).Width + 4, Width / 3);
+                TextRenderer.DrawText(g, RightText, small, new Rectangle(Width - 20 - rw, 0, rw, Height), soft, Color.Transparent, one | TextFormatFlags.Right);
+            }
+            int tw = Width - tx - rw - 36;
+            TextRenderer.DrawText(g, Label, small, new Rectangle(tx, Height / 2 - 24, tw, 20), soft, Color.Transparent, one);
+            TextRenderer.DrawText(g, Title, big, new Rectangle(tx, Height / 2 - 4, tw, 28), Color.White, Color.Transparent, one);
+        }
+    }
+}
+
+// A slim progress bar (how much of today is done)
+public class DrProgress : Control {
+    public double Value;
+    public Color From = Color.FromArgb(47, 111, 219), To = Color.FromArgb(46, 139, 87);
+    public DrProgress() { SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true); }
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        g.Clear(DrUi.Back(Parent));
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        RectangleF track = new RectangleF(0, (Height - 6) / 2f, Width - 1, 6);
+        using (System.Drawing.Drawing2D.GraphicsPath p = DrUi.Round(track, 3)) { using (SolidBrush b = new SolidBrush(DrUi.Hex("#EAEDF1"))) { g.FillPath(b, p); } }
+        float w = (float)(System.Math.Max(0, System.Math.Min(1, Value)) * (Width - 1));
+        if (w >= 6) {
+            RectangleF fr = new RectangleF(0, track.Y, w, 6);
+            using (System.Drawing.Drawing2D.GraphicsPath p = DrUi.Round(fr, 3))
+            using (System.Drawing.Drawing2D.LinearGradientBrush br = new System.Drawing.Drawing2D.LinearGradientBrush(new PointF(0, 0), new PointF(Width, 0), From, To)) { g.FillPath(br, p); }
+        }
+    }
+}
+
+// Month calendar that is always visible: click a day, arrows or the mouse wheel change the month
+public class DrMonth : Control {
+    public System.DateTime Month = new System.DateTime(System.DateTime.Today.Year, System.DateTime.Today.Month, 1);
+    public System.DateTime Selected = System.DateTime.Today;
+    public System.DateTime Today = System.DateTime.Today;
+    public System.DateTime Picked;
+    public Color Accent = Color.FromArgb(47, 111, 219);
+    public event System.EventHandler DayPicked;
+    public event System.EventHandler MonthChanged;
+    int hover = -1;   // 0..41 a day, 100 = back, 101 = forward
+    static readonly string[] Names = { "Mo", "Tu", "We", "Th", "Fr", "Sa", "Su" };
+    const int Head = 40, NamesH = 22;
+
+    public DrMonth() {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+    }
+    public System.DateTime GridStart {
+        get { int dow = ((int)Month.DayOfWeek + 6) % 7; return Month.AddDays(-dow); }
+    }
+    public void ShowMonth(System.DateTime anyDay) {
+        System.DateTime m = new System.DateTime(anyDay.Year, anyDay.Month, 1);
+        if (m != Month) { Month = m; Invalidate(); if (MonthChanged != null) { MonthChanged(this, System.EventArgs.Empty); } }
+        else { Invalidate(); }
+    }
+    Rectangle ArrowRect(bool fwd) { return new Rectangle(Width - (fwd ? 32 : 66), 6, 30, 30); }
+    RectangleF CellRect(int i) {
+        float cw = Width / 7f, ch = (Height - Head - NamesH) / 6f;
+        return new RectangleF((i % 7) * cw, Head + NamesH + (i / 7) * ch, cw, ch);
+    }
+    int HitTest(Point p) {
+        if (ArrowRect(false).Contains(p)) { return 100; }
+        if (ArrowRect(true).Contains(p)) { return 101; }
+        if (p.Y < Head + NamesH) { return -1; }
+        for (int i = 0; i < 42; i++) { if (CellRect(i).Contains(p)) { return i; } }
+        return -1;
+    }
+    protected override void OnMouseMove(MouseEventArgs e) {
+        int h = HitTest(e.Location);
+        if (h != hover) { hover = h; Cursor = h >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); }
+        base.OnMouseMove(e);
+    }
+    protected override void OnMouseLeave(System.EventArgs e) { hover = -1; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseEnter(System.EventArgs e) {
+        Form f = FindForm();
+        if (f != null && f.ContainsFocus && !(f.ActiveControl is TextBox)) { Focus(); }   // so the wheel works right away
+        base.OnMouseEnter(e);
+    }
+    protected override void OnMouseWheel(MouseEventArgs e) { ShowMonth(Month.AddMonths(e.Delta > 0 ? -1 : 1)); base.OnMouseWheel(e); }
+    protected override void OnMouseUp(MouseEventArgs e) {
+        if (e.Button == MouseButtons.Left) {
+            int h = HitTest(e.Location);
+            if (h == 100) { ShowMonth(Month.AddMonths(-1)); }
+            else if (h == 101) { ShowMonth(Month.AddMonths(1)); }
+            else if (h >= 0) {
+                Picked = GridStart.AddDays(h);
+                if (DayPicked != null) { DayPicked(this, System.EventArgs.Empty); }
+            }
+        }
+        base.OnMouseUp(e);
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        Color back = DrUi.Back(Parent);
+        g.Clear(back);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        Color text = DrUi.Hex("#1B1F24"), faint = DrUi.Hex("#A9B0BA"), dim = DrUi.Hex("#8A929E");
+        using (Font big = DrUi.F(Font, 2.5f, true))
+        using (Font bold = DrUi.F(Font, 0f, true))
+        using (Font small = new Font(Font.FontFamily, Font.Size - 1.5f)) {
+            TextRenderer.DrawText(g, Month.ToString("MMMM yyyy", System.Globalization.CultureInfo.InvariantCulture), big,
+                new Rectangle(2, 4, Width - 72, 34), text, back, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix);
+            for (int k = 0; k < 2; k++) {
+                Rectangle ar = ArrowRect(k == 1);
+                if (hover == 100 + k) { using (System.Drawing.Drawing2D.GraphicsPath p = DrUi.Round(ar, 8)) { using (SolidBrush b = new SolidBrush(DrUi.Mix(back, Color.Black, 0.06))) { g.FillPath(b, p); } } }
+                DrUi.Icon(g, k == 1 ? "right" : "left", new RectangleF(ar.X + 6, ar.Y + 6, 18, 18), DrUi.Hex("#3D4652"));
+            }
+            float cw = Width / 7f;
+            for (int i = 0; i < 7; i++) {
+                TextRenderer.DrawText(g, Names[i], small, new Rectangle((int)(i * cw), Head, (int)cw, NamesH), dim, back,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            }
+            System.DateTime start = GridStart;
+            for (int i = 0; i < 42; i++) {
+                System.DateTime d = start.AddDays(i);
+                RectangleF c = CellRect(i);
+                float dia = System.Math.Min(32, System.Math.Min(c.Width, c.Height) - 4);
+                RectangleF circ = new RectangleF(c.X + (c.Width - dia) / 2, c.Y + (c.Height - dia) / 2, dia, dia);
+                bool sel = d.Date == Selected.Date, today = d.Date == Today.Date, inMonth = d.Month == Month.Month;
+                Color ink = inMonth ? text : faint;
+                if (sel) {
+                    using (SolidBrush b = new SolidBrush(Accent)) { g.FillEllipse(b, circ); }
+                    ink = Color.White;
+                } else if (hover == i) {
+                    using (SolidBrush b = new SolidBrush(DrUi.Mix(back, Color.Black, 0.06))) { g.FillEllipse(b, circ); }
+                }
+                if (today && !sel) {
+                    using (Pen pen = new Pen(Accent, 1.6f)) { g.DrawEllipse(pen, circ.X + 1, circ.Y + 1, circ.Width - 2, circ.Height - 2); }
+                    ink = Accent;
+                }
+                Rectangle tr = Rectangle.Round(new RectangleF(c.X, circ.Y, c.Width, circ.Height));
+                Color under = sel ? Accent : (hover == i ? DrUi.Mix(back, Color.Black, 0.06) : back);
+                TextRenderer.DrawText(g, d.Day.ToString(), (sel || today) ? bold : Font, tr, ink, under,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            }
+        }
+    }
+}
+
+// One schedule in the side panel: switch (shared only), colour dot, name, details and a menu button
+public class DrSchedRow : Control {
+    public string Title = "", Sub = "";
+    public Color Dot = Color.FromArgb(47, 111, 219);
+    public Color Accent = Color.FromArgb(47, 111, 219);
+    public bool IsOn = true, ShowToggle = true, Selected;
+    public string Action = "";
+    public event System.EventHandler RowAction;
+    int hover;   // 0 none, 1 row, 2 switch, 3 menu
+    public DrSchedRow() {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        Cursor = Cursors.Hand;
+    }
+    Rectangle SwitchRect() { return new Rectangle(10, (Height - 20) / 2, 36, 20); }
+    Rectangle MenuRect() { return new Rectangle(Width - 34, (Height - 28) / 2, 28, 28); }
+    int Hit(Point p) {
+        if (ShowToggle && SwitchRect().Contains(p)) { return 2; }
+        if (MenuRect().Contains(p)) { return 3; }
+        return ClientRectangle.Contains(p) ? 1 : 0;
+    }
+    void Raise(string a) { Action = a; if (RowAction != null) { RowAction(this, System.EventArgs.Empty); } }
+    protected override void OnMouseMove(MouseEventArgs e) { int h = Hit(e.Location); if (h != hover) { hover = h; Invalidate(); } base.OnMouseMove(e); }
+    protected override void OnMouseLeave(System.EventArgs e) { hover = 0; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseUp(MouseEventArgs e) {
+        int h = Hit(e.Location);
+        if (e.Button == MouseButtons.Right) { Raise("menu"); }
+        else if (e.Button == MouseButtons.Left) { Raise(h == 2 ? "toggle" : h == 3 ? "menu" : "select"); }
+        base.OnMouseUp(e);
+    }
+    protected override void OnMouseDoubleClick(MouseEventArgs e) {
+        if (e.Button == MouseButtons.Left && Hit(e.Location) == 1) { Raise("open"); }
+        base.OnMouseDoubleClick(e);
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        Color back = DrUi.Back(Parent);
+        g.Clear(back);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        RectangleF r = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+        Color fill = Selected ? Color.White : (hover > 0 ? DrUi.Mix(back, Color.Black, 0.035) : back);
+        using (System.Drawing.Drawing2D.GraphicsPath p = DrUi.Round(r, 10)) {
+            using (SolidBrush b = new SolidBrush(fill)) { g.FillPath(b, p); }
+            if (Selected) { using (Pen pen = new Pen(DrUi.Hex("#DADFE5"))) { g.DrawPath(pen, p); } }
+        }
+        int x = 14;
+        if (ShowToggle) {
+            Rectangle sr = SwitchRect();
+            Color tc = IsOn ? Accent : DrUi.Hex("#C3C9D2");
+            using (System.Drawing.Drawing2D.GraphicsPath p = DrUi.Round(sr, 10)) { using (SolidBrush b = new SolidBrush(tc)) { g.FillPath(b, p); } }
+            float kx = IsOn ? sr.Right - 18 : sr.X + 2;
+            g.FillEllipse(Brushes.White, kx, sr.Y + 2, 16, 16);
+            x = 56;
+        }
+        int tx = ShowToggle ? x : 14, tw = Width - tx - ((hover > 0 || Selected) ? 38 : 10);
+        using (Font bold = DrUi.F(Font, 0f, true))
+        using (Font small = new Font(Font.FontFamily, Font.Size - 1f)) {
+            TextRenderer.DrawText(g, Title, bold, new Rectangle(tx, 6, tw, 22), IsOn ? DrUi.Mix(Dot, Color.Black, 0.08) : DrUi.Hex("#9AA1AB"), fill,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+            TextRenderer.DrawText(g, Sub, small, new Rectangle(tx, 27, tw, 18), DrUi.Hex("#6B7380"), fill,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+        }
+        Rectangle mr = MenuRect();
+        if (hover == 3) { using (System.Drawing.Drawing2D.GraphicsPath p = DrUi.Round(mr, 7)) { using (SolidBrush b = new SolidBrush(DrUi.Mix(fill, Color.Black, 0.07))) { g.FillPath(b, p); } } }
+        if (hover > 0 || Selected) { DrUi.Icon(g, "more", new RectangleF(mr.X + 4, mr.Y + 4, 20, 20), DrUi.Hex("#5B6470")); }
+    }
+}
+
+// One reminder on the day view
+public class DrItem {
+    public int Minute;
+    public string Time = "", Title = "", Line2 = "", Chip = "", Alert = "on", IconName = "bell";
+    public Color Color1 = Color.FromArgb(47, 111, 219);
+    public bool Done;
+    public object Tag;
+    public string Key = "";
+    public Rectangle Box, BellBox;
+}
+
+// The day, like a calendar's day view without boxes: hours down the left, each reminder a quiet
+// line of text with a colour dot. Busy hours grow so nothing overlaps; a red line shows now.
+public class DrTimeline : Panel {
+    public List<DrItem> Items = new List<DrItem>();
+    public int HourH = 44, RowH = 52, TopPad = 8, Gutter = 64;
+    public int NowMinute = -1;
+    public string EmptyText = "";
+    public bool Blank;   // nothing at all yet: no hours, just the message (and the start buttons)
+    public Color Accent = Color.FromArgb(47, 111, 219);
+    public DrItem Selected, ActionItem;
+    public string Action = "";
+    public int ActionMinute;
+    public event System.EventHandler ItemAction;
+    int[] hourTop = new int[25];
+    List<DrItem>[] perHour = new List<DrItem>[24];
+    DrItem hover;
+    bool hoverBell;
+
+    public DrTimeline() {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+        AutoScroll = true;
+        BackColor = Color.White;
+        TabStop = true;
+        for (int h = 0; h < 24; h++) { perHour[h] = new List<DrItem>(); }
+    }
+    // Where a time is (in the scrolled content): between the reminders before and after it
+    public int MinuteY(int m) {
+        m = System.Math.Max(0, System.Math.Min(1439, m));
+        int h = m / 60;
+        List<DrItem> l = perHour[h];
+        if (l.Count == 0) { return hourTop[h] + (int)((hourTop[h + 1] - hourTop[h]) * (m % 60) / 60.0); }
+        int k = 0;
+        foreach (DrItem it in l) { if (it.Minute <= m) { k++; } }
+        return hourTop[h] + 4 + k * RowH;
+    }
+    public void ScrollToMinute(int m) {
+        AutoScrollPosition = new Point(0, System.Math.Max(0, MinuteY(m) - 16));
+        Invalidate();
+    }
+    public void Relayout() {
+        for (int h = 0; h < 24; h++) { perHour[h].Clear(); }
+        List<DrItem> sorted = new List<DrItem>(Items);
+        sorted.Sort(delegate(DrItem a, DrItem b) { return a.Minute.CompareTo(b.Minute); });
+        foreach (DrItem it in sorted) { perHour[System.Math.Max(0, System.Math.Min(23, it.Minute / 60))].Add(it); }
+        int y = TopPad;
+        int x0 = Gutter + 4;
+        int w = System.Math.Max(160, ClientSize.Width - x0 - 12);
+        for (int h = 0; h < 24; h++) {
+            hourTop[h] = y;
+            int k = 0;
+            foreach (DrItem it in perHour[h]) {
+                it.Box = new Rectangle(x0, y + 4 + k * RowH, w, RowH - 2);
+                it.BellBox = new Rectangle(it.Box.Right - 32, it.Box.Y + (it.Box.Height - 28) / 2, 28, 28);
+                k++;
+            }
+            y += System.Math.Max(HourH, 8 + k * RowH);
+        }
+        hourTop[24] = y;
+        AutoScrollMinSize = Blank ? Size.Empty : new Size(0, y + TopPad);
+        Invalidate();
+    }
+    protected override void OnResize(System.EventArgs e) { base.OnResize(e); Relayout(); }
+    protected override void OnScroll(ScrollEventArgs se) { base.OnScroll(se); Invalidate(); }
+    protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); Invalidate(); }
+
+    DrItem HitItem(Point p, out bool onBell) {
+        onBell = false;
+        foreach (DrItem it in Items) {
+            if (it.Box.Contains(p)) { onBell = it.BellBox.Contains(p); return it; }
+        }
+        return null;
+    }
+    Point Doc(Point p) { return new Point(p.X - AutoScrollPosition.X, p.Y - AutoScrollPosition.Y); }
+    int MinuteAt(int y) {
+        for (int h = 0; h < 24; h++) {
+            if (y < hourTop[h + 1]) {
+                double frac = System.Math.Max(0, (y - hourTop[h]) / (double)System.Math.Max(1, hourTop[h + 1] - hourTop[h]));
+                return System.Math.Min(1425, h * 60 + (int)System.Math.Floor(frac * 4) * 15);
+            }
+        }
+        return 1425;
+    }
+    void Raise(string a, DrItem it, Point docPoint) {
+        Action = a; ActionItem = it;
+        ActionMinute = MinuteAt(docPoint.Y);
+        if (ItemAction != null) { ItemAction(this, System.EventArgs.Empty); }
+    }
+    protected override void OnMouseMove(MouseEventArgs e) {
+        bool b;
+        DrItem h = HitItem(Doc(e.Location), out b);
+        if (h != hover || b != hoverBell) { hover = h; hoverBell = b; Cursor = h != null ? Cursors.Hand : Cursors.Default; Invalidate(); }
+        base.OnMouseMove(e);
+    }
+    protected override void OnMouseLeave(System.EventArgs e) { hover = null; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseDown(MouseEventArgs e) { Focus(); base.OnMouseDown(e); }
+    protected override void OnMouseUp(MouseEventArgs e) {
+        Point d = Doc(e.Location);
+        bool b;
+        DrItem it = HitItem(d, out b);
+        if (it != null) {
+            Selected = it; Invalidate();
+            if (e.Button == MouseButtons.Right) { Raise("menu", it, d); }
+            else if (e.Button == MouseButtons.Left) { Raise(b ? "bell" : "select", it, d); }
+        } else {
+            Selected = null; Invalidate();
+            Raise(e.Button == MouseButtons.Right ? "emptymenu" : "none", null, d);
+        }
+        base.OnMouseUp(e);
+    }
+    protected override void OnMouseDoubleClick(MouseEventArgs e) {
+        Point d = Doc(e.Location);
+        bool b;
+        DrItem it = HitItem(d, out b);
+        if (e.Button == MouseButtons.Left && !b) { Raise(it != null ? "edit" : "add", it, d); }
+        base.OnMouseDoubleClick(e);
+    }
+
+    static Color Hx(string s) { return DrUi.Hex(s); }
+
+    // Note: no TranslateTransform here - Windows' text drawing ignores it, so every position is
+    // worked out with the scroll offset added by hand.
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        g.Clear(BackColor);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        int oy = AutoScrollPosition.Y;
+        int view = ClientSize.Height;
+        if (Blank) {
+            TextRenderer.DrawText(g, EmptyText, Font, new Rectangle(82, 24, System.Math.Max(50, ClientSize.Width - 120), 44), Hx("#5B6470"), BackColor,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+            return;
+        }
+        int right = ClientSize.Width - 10;
+        TextFormatFlags one = TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding;
+        using (Font small = new Font(Font.FontFamily, Font.Size - 1f))
+        using (Font titleF = DrUi.F(Font, 0.5f, true)) {
+            int nowY = NowMinute >= 0 ? MinuteY(NowMinute) : -10000;
+            // Hours
+            using (Pen pen = new Pen(Hx("#EEF0F3"))) {
+                for (int h = 0; h < 24; h++) {
+                    int y = hourTop[h] + oy;
+                    if (y > view || hourTop[h + 1] + oy < 0) { continue; }
+                    g.DrawLine(pen, Gutter, y, right, y);
+                    if (System.Math.Abs(nowY - hourTop[h]) > 14) {
+                        TextRenderer.DrawText(g, h.ToString("00") + ":00", small, new Rectangle(0, y - 1, Gutter - 12, 20), Hx("#9AA1AB"), BackColor,
+                            TextFormatFlags.Right | TextFormatFlags.Top | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                    }
+                }
+            }
+            // Reminders
+            foreach (DrItem it in Items) {
+                Rectangle bx = it.Box;
+                bx.Offset(0, oy);
+                if (bx.Bottom < 0 || bx.Y > view) { continue; }
+                bool other = it.Alert == "off";
+                bool faded = it.Done || other;
+                Color back = BackColor;
+                if (it == Selected) { back = DrUi.Mix(it.Color1, Color.White, 0.9); }
+                else if (it == hover) { back = Hx("#F5F7FA"); }
+                if (back != BackColor) {
+                    using (System.Drawing.Drawing2D.GraphicsPath p = DrUi.Round(bx, 9)) { using (SolidBrush b = new SolidBrush(back)) { g.FillPath(b, p); } }
+                }
+                // Time, a soft round icon, then the title (in the schedule's colour) with details below
+                Color timeInk = faded ? Hx("#AEB4BD") : Hx("#6B7380");
+                Color titleInk = faded ? DrUi.Mix(it.Color1, Color.White, 0.55) : DrUi.Mix(it.Color1, Color.Black, 0.08);
+                Color detailInk = faded ? Hx("#B7BCC4") : Hx("#7A828E");
+                int x = bx.X + 12;
+                TextRenderer.DrawText(g, it.Time, Font, new Rectangle(x, bx.Y, 52, bx.Height), timeInk, back, one);
+                x += 58;
+                RectangleF circ = new RectangleF(x, bx.Y + (bx.Height - 34) / 2f, 34, 34);
+                Color tint = faded ? Hx("#F0F2F5") : DrUi.Mix(it.Color1, Color.White, 0.87);
+                using (SolidBrush b = new SolidBrush(tint)) { g.FillEllipse(b, circ); }
+                DrUi.Icon(g, it.IconName, new RectangleF(circ.X + 8.5f, circ.Y + 8.5f, 17, 17), faded ? DrUi.Mix(it.Color1, Color.White, 0.5) : it.Color1);
+                x += 48;
+                int end = bx.Right - 40;
+                if (it.Chip != "") {
+                    Size cs = TextRenderer.MeasureText(g, it.Chip, small, new Size(9999, 20), one);
+                    int cw = System.Math.Min(cs.Width, 180);
+                    if (end - cw - 12 > x + 80) {
+                        Color chipInk = faded ? Hx("#AEB4BD") : DrUi.Mix(it.Color1, Color.Black, 0.2);
+                        TextRenderer.DrawText(g, it.Chip, small, new Rectangle(end - cw, bx.Y, cw, bx.Height), chipInk, back, one);
+                        end = end - cw - 14;
+                    }
+                }
+                int midY = bx.Y + bx.Height / 2;
+                bool two = it.Line2 != "";
+                TextRenderer.DrawText(g, it.Title, titleF, new Rectangle(x, two ? midY - 21 : bx.Y, System.Math.Max(40, end - x), two ? 22 : bx.Height), titleInk, back, one);
+                if (two) {
+                    TextRenderer.DrawText(g, it.Line2, small, new Rectangle(x, midY + 1, System.Math.Max(30, end - x), 18), detailInk, back, one);
+                }
+                // Bell (or megaphone): quiet until you point at the reminder
+                Rectangle bb = it.BellBox; bb.Offset(0, oy);
+                if (it == hover && hoverBell) {
+                    using (System.Drawing.Drawing2D.GraphicsPath p = DrUi.Round(bb, 8)) { using (SolidBrush b = new SolidBrush(DrUi.Mix(back, Color.Black, 0.06))) { g.FillPath(b, p); } }
+                }
+                string icon = it.Alert == "shout" ? "megaphone" : (it.Alert == "on" ? "bell" : "bell-off");
+                Color ink = it.Alert == "shout" ? Hx("#B5541B") : it.Alert == "muted" ? Hx("#8A929E") : other ? Hx("#C9CED6")
+                          : (it == hover || it == Selected) ? Hx("#3D4652") : Hx("#C3C9D2");
+                DrUi.Icon(g, icon, new RectangleF(bb.X + 6, bb.Y + 6, 16, 16), ink);
+            }
+            // Now
+            if (NowMinute >= 0) {
+                int y = nowY + oy;
+                Color red = Hx("#E5484D");
+                using (Pen pen = new Pen(red, 1.6f)) { g.DrawLine(pen, Gutter, y, right, y); }
+                using (SolidBrush b = new SolidBrush(red)) { g.FillEllipse(b, Gutter - 5, y - 5, 10, 10); }
+                string t = (NowMinute / 60).ToString("00") + ":" + (NowMinute % 60).ToString("00");
+                TextRenderer.DrawText(g, t, small, new Rectangle(0, y - 10, Gutter - 12, 20), red, BackColor,
+                    TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+            }
+            if (Items.Count == 0 && EmptyText != "") {
+                TextRenderer.DrawText(g, EmptyText, Font, new Rectangle(Gutter + 16, 16, System.Math.Max(50, ClientSize.Width - Gutter - 40), 44), Hx("#8A929E"), BackColor,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+            }
+        }
+    }
+}
 // Menu colours for dark mode
 public class DarkMenuColors : ProfessionalColorTable {
     static Color Bg = Color.FromArgb(43, 45, 49), Sel = Color.FromArgb(58, 68, 88), Line = Color.FromArgb(70, 72, 78), Bar = Color.FromArgb(32, 33, 36);
@@ -621,16 +1420,24 @@ try { [QuietForm]::HideConsole() } catch {}
 $created = $false
 $script:mutex = New-Object System.Threading.Mutex($true, 'Local\DeskReminders', [ref]$created)
 if (-not $created) {
-    [System.Windows.Forms.MessageBox]::Show('Desk Reminders is already running (check the tray).', 'Desk Reminders') | Out-Null
+    # Already running: ask it to open its window (and allow it to come to the front), then stop
+    try {
+        [DrUi]::AllowAnyForeground()
+        $ev = [System.Threading.EventWaitHandle]::OpenExisting('Local\DeskReminders.Show')
+        [void]$ev.Set()
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show('Desk Reminders is already running (check the tray).', 'Desk Reminders') | Out-Null
+    }
     return
 }
+$script:showEvent = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::AutoReset, 'Local\DeskReminders.Show')
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 # Older "Start with Windows" shortcuts left a PowerShell window open on Windows 11: update them
 try {
     if (Test-StartupLink) {
         $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Get-StartupLinkPath))
-        if ($lnk.TargetPath -notlike '*conhost.exe' -or -not ([string]$lnk.Arguments).Contains($PSCommandPath)) { Install-StartupLink }
+        if ($lnk.TargetPath -notlike '*conhost.exe' -or -not ([string]$lnk.Arguments).Contains($PSCommandPath) -or -not ([string]$lnk.Arguments).Contains('-Startup')) { Install-StartupLink }
     }
 } catch {}
 # Own taskbar identity, so windows show the bell instead of the PowerShell icon
@@ -654,13 +1461,59 @@ $script:dlgBusy    = $false
 $script:appIcon = $null
 if (Test-Path $IconFile) { try { $script:appIcon = New-Object System.Drawing.Icon $IconFile } catch {} }
 
-$UiFont     = New-Object System.Drawing.Font('Segoe UI', 10)
-$BoldFont   = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
-$SmallFont  = New-Object System.Drawing.Font('Segoe UI', 9)
-$SmallBold  = New-Object System.Drawing.Font('Segoe UI', 8.5, [System.Drawing.FontStyle]::Bold)
-$ItalicFont = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Italic)
+# --- Fonts -------------------------------------------------------------------
+# The app uses Albert Sans (in the assets folder; free, SIL Open Font License). A font file you put
+# in a 'fonts' folder next to this script is used instead. Fonts are only loaded for this app:
+# nothing is installed on the PC. Without either: Segoe UI Variable (Windows 11) or Segoe UI.
+$script:fontFiles = New-Object System.Drawing.Text.PrivateFontCollection
+$script:AppFamily = $null
+foreach ($dir in @((Join-Path $PSScriptRoot 'fonts'), (Join-Path $PSScriptRoot 'assets'))) {
+    if ($script:AppFamily -or -not (Test-Path -LiteralPath $dir)) { continue }
+    $pfc = New-Object System.Drawing.Text.PrivateFontCollection
+    foreach ($ff in @(Get-ChildItem -LiteralPath $dir -File | Where-Object { $_.Extension -in @('.ttf', '.otf') } | Sort-Object Name)) {
+        try {
+            [DrUi]::LoadFontForGdi($ff.FullName)      # so ordinary labels and buttons can draw it too
+            $pfc.AddFontFile($ff.FullName)
+        } catch {}
+    }
+    if ($pfc.Families.Count -gt 0) { $script:fontFiles = $pfc; $script:AppFamily = $pfc.Families[0] }
+}
+if (-not $script:AppFamily) {
+    foreach ($n in @('Segoe UI Variable Text', 'Segoe UI')) {
+        try { $script:AppFamily = New-Object System.Drawing.FontFamily($n); break } catch {}
+    }
+}
+
+# A font in the app's family. A style the font doesn't have (e.g. bold) falls back to regular.
+function New-UiFont([single]$size, [string]$style = 'Regular') {
+    $st = [System.Drawing.FontStyle]$style
+    try {
+        if ($script:AppFamily) {
+            if (-not $script:AppFamily.IsStyleAvailable($st)) { $st = [System.Drawing.FontStyle]::Regular }
+            return New-Object System.Drawing.Font($script:AppFamily, $size, $st)
+        }
+    } catch {}
+    return New-Object System.Drawing.Font('Segoe UI', $size, [System.Drawing.FontStyle]$style)
+}
+# Headings: no bold (cleaner), just a little bigger
+function New-HeadFont([single]$size) { New-UiFont ($size + 0.5) }
+
+$UiFont     = New-UiFont 10
+$BoldFont   = New-HeadFont 10
+$SmallFont  = New-UiFont 9
+$SmallBold  = New-HeadFont 8.5
+$ItalicFont = New-UiFont 9 'Italic'
 $Accent     = [System.Drawing.ColorTranslator]::FromHtml($MineColor)
 $Dot        = [string][char]0x25CF
+$MFont      = New-UiFont 10
+$MBold      = New-HeadFont 10
+$MSmall     = New-UiFont 9
+$MSmallBold = New-HeadFont 8.5
+$MBig       = New-HeadFont 12
+$MHeadSmall = New-HeadFont 11
+$MHead      = New-HeadFont 12.5
+$MTitle     = New-HeadFont 18
+$UiAccent   = [System.Drawing.ColorTranslator]::FromHtml('#2F6FDB')   # buttons, selected day, switches
 
 function To-Color([string]$c) {
     if ($c -notmatch '^#[0-9A-Fa-f]{6}$') { $c = $script:DefaultColor }
@@ -915,52 +1768,19 @@ function Add-Alerts($list) {
     }
 }
 
-# Small drawn icons for the list (16x16)
+# Small drawn icons (16x16) for the legend: the same bell / muted bell / megaphone as on the day view
 function New-AlertIcon([string]$kind) {
     $bmp = New-Object System.Drawing.Bitmap(16, 16)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.SmoothingMode = 'AntiAlias'
+    $name = switch ($kind) { 'on' { 'bell' } 'shout' { 'megaphone' } default { 'bell-off' } }
     $ink = switch ($kind) {
-        'on'    { [System.Drawing.Color]::FromArgb(40, 44, 52) }
-        'muted' { [System.Drawing.Color]::FromArgb(120, 120, 120) }
-        'off'   { [System.Drawing.Color]::FromArgb(195, 195, 195) }
+        'on'    { [System.Drawing.Color]::FromArgb(61, 70, 82) }
+        'muted' { [System.Drawing.Color]::FromArgb(138, 146, 158) }
+        'off'   { [System.Drawing.Color]::FromArgb(201, 206, 214) }
         'shout' { [System.Drawing.ColorTranslator]::FromHtml('#B5541B') }
     }
-    $brush = New-Object System.Drawing.SolidBrush($ink)
-    if ($kind -eq 'shout') {
-        # Megaphone: mouth on the right, handle on the left, two sound waves
-        $pts = [System.Drawing.PointF[]]@(
-            (New-Object System.Drawing.PointF(2, 6)), (New-Object System.Drawing.PointF(5, 6)),
-            (New-Object System.Drawing.PointF(10, 2)), (New-Object System.Drawing.PointF(10, 13)),
-            (New-Object System.Drawing.PointF(5, 9)), (New-Object System.Drawing.PointF(2, 9)))
-        $g.FillPolygon($brush, $pts)
-        $g.FillRectangle($brush, 4, 9, 2, 4)
-        $pen = New-Object System.Drawing.Pen($ink, 1.4)
-        $g.DrawArc($pen, 9, 4, 4, 7, -60, 120)
-        $g.DrawArc($pen, 10, 2, 6, 11, -60, 120)
-        $pen.Dispose()
-    } else {
-        # Bell: dome, flared rim, clapper
-        $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-        $path.AddArc(4, 2, 8, 9, 180, 180)
-        $path.AddLine(12, 6.5, 13.5, 11.5)
-        $path.AddLine(13.5, 11.5, 2.5, 11.5)
-        $path.AddLine(2.5, 11.5, 4, 6.5)
-        $path.CloseFigure()
-        $g.FillPath($brush, $path)
-        $g.FillEllipse($brush, 6.5, 12, 3, 3)
-        $g.FillRectangle($brush, 7.5, 1, 1, 2)
-        $path.Dispose()
-        if ($kind -ne 'on') {
-            # The slash: a white gap with a line on top, so it reads on any row
-            $gap = New-Object System.Drawing.Pen([System.Drawing.Color]::White, 3)
-            $g.DrawLine($gap, 2, 14, 14, 2)
-            $line = New-Object System.Drawing.Pen($ink, 1.6)
-            $g.DrawLine($line, 2, 14, 14, 2)
-            $gap.Dispose(); $line.Dispose()
-        }
-    }
-    $brush.Dispose(); $g.Dispose()
+    [DrUi]::Icon($g, $name, (New-Object System.Drawing.RectangleF(0, 0, 16, 16)), $ink)
+    $g.Dispose()
     return $bmp
 }
 
@@ -1013,124 +1833,137 @@ function Show-Reminder($items) {
     $items = @($items)
     if ($items.Count -eq 0) { return }
     if ($script:current -and -not $script:current.IsDisposed) { $script:current.Close() }
+    $mid = [string][char]0x00B7
+    $W = 400
+    $white = [System.Drawing.Color]::White
+    $dim = New-Rgb 74 82 96
 
     $form = New-Object QuietForm
     $form.FormBorderStyle = 'None'
     $form.StartPosition   = 'Manual'
     $form.ShowInTaskbar   = $false
     $form.TopMost         = $true
-    $form.Width = 460
+    $form.BackColor       = $white
+    $form.Font            = $MFont
+    $form.Width = $W
+    $popTip = New-Object System.Windows.Forms.ToolTip
 
-    # Every reminder gets a block in its own schedule's colour
     $shown = [math]::Min($items.Count, 4)
+    $single = ($items.Count -eq 1)
     $colours = @($items[0..($shown - 1)] | ForEach-Object { (To-Color $_.Colour).ToArgb() } | Select-Object -Unique)
-    $mixed = $colours.Count -gt 1
-    $barColor = if ($mixed) { [System.Drawing.Color]::FromArgb(43, 47, 54) } else { To-Color $items[0].Colour }
-    $form.BackColor = $barColor
+    $mainColor = if ($colours.Count -gt 1) { $UiAccent } else { To-Color $items[0].Colour }
 
     $controls = @()
     $closers = @()
-    $y = 0
+    $y = 4
+    $textX = if ($single) { 74 } else { 18 }
     for ($i = 0; $i -lt $shown; $i++) {
         $it = $items[$i]
-        $back = To-Color $it.Colour
-        $panel = New-Object System.Windows.Forms.Panel
-        $panel.BackColor = $back
-        $closers += $panel
-        $py = 12
-        $inner = @()
-        if ($i -gt 0 -and -not $mixed) {
-            $line = New-Object System.Windows.Forms.Panel
-            $line.BackColor = [System.Windows.Forms.ControlPaint]::Light($back)
-            $line.SetBounds(20, 0, 420, 1)
-            $inner += $line
-        }
-        $label = if ($it.IsMine) { '' } else { $it.Source.ToUpper() }
-        if (@($it.For).Count -gt 0) { $label += '  -  ' + ((@($it.For) -join ', ').ToUpper()) }
-        if ($it.Snoozed) { $label = ('SNOOZED   ' + $label).Trim() }
-        if ($label) {
-            $src = New-Object System.Windows.Forms.Label
-            $src.Text = $label
-            $src.ForeColor = [System.Windows.Forms.ControlPaint]::LightLight($back)
-            $src.Font = $SmallBold
-            $src.AutoSize = $false
-            $src.AutoEllipsis = $true
-            $src.SetBounds(20, $py, 420, 18)
-            $inner += $src
-            $py += 18
-        }
-        $title = New-Object System.Windows.Forms.Label
-        $title.Text = "$($it.EventTime)  $($it.Title)"
-        $title.ForeColor = 'White'
-        $title.Font = New-Object System.Drawing.Font('Segoe UI', 16, [System.Drawing.FontStyle]::Bold)
-        $title.AutoSize = $false
-        $title.AutoEllipsis = $true
-        $title.SetBounds(20, $py, 420, 36)
-        $inner += $title
-        $py += 36
+        $col = To-Color $it.Colour
+        $ink = [DrUi]::Mix($col, [System.Drawing.Color]::Black, 0.08)
+        $label = if ($it.IsMine) { Get-MineName } else { $it.Source }
+        if (@($it.For).Count -gt 0) { $label += "  $mid  " + (@($it.For) -join ', ') }
+        if ($it.Snoozed) { $label = "Snoozed  $mid  $label" }
         $bodyText = $it.Text
         if ($it.Kind -eq 'notice') {
             $bodyText = "Starts in $($it.Notice) minutes." + $(if ($it.Text) { ' ' + $it.Text } else { '' })
         }
-        if ($bodyText) {
-            $body = New-Object System.Windows.Forms.Label
-            $body.Text = $bodyText
-            $body.ForeColor = 'White'
-            $body.Font = New-Object System.Drawing.Font('Segoe UI', 11)
-            $body.AutoSize = $false
-            $body.SetBounds(20, $py, 420, 44)
-            $inner += $body
-            $py += 46
+        $textW = $W - $textX - 52
+
+        if ($i -gt 0) {
+            $sep = New-Object System.Windows.Forms.Panel
+            $sep.BackColor = New-Rgb 238 240 243
+            $sep.SetBounds(16, $y, ($W - 32), 1)
+            $controls += $sep
         }
-        $py += 6
-        $panel.SetBounds(0, $y, 460, $py)
-        $panel.Controls.AddRange([System.Windows.Forms.Control[]]$inner)
-        $closers += @($inner | Where-Object { $_ -is [System.Windows.Forms.Label] })
-        $controls += $panel
-        $y += $py
+        $y += 12
+        $rowTop = $y
+        if ($single) {
+            $tile = New-Object DrIconTile
+            $tile.Color1 = $col
+            $tile.IconName = Get-ReminderIcon $it
+            $tile.SetBounds(16, ($y + 4), 44, 44)
+            $controls += $tile
+            $closers += $tile
+            $close = New-DrBtn '' 'ghost' 'close' ($W - 42) ($y - 2) 28 28
+            $close.Radius = 7
+            $close.Add_Click({ $this.FindForm().Close() })
+            $controls += $close
+        }
+        # Schedule and time in grey, the title in the schedule's colour (like the day view)
+        $lab = New-UiLabel "$label  $mid  $($it.EventTime)" $MSmall (New-Rgb 107 115 128) $textX $y $textW 18
+        $title = New-UiLabel $it.Title $MBig $ink $textX ($y + 19) $textW 26
+        $controls += @($lab, $title)
+        $closers += @($lab, $title)
+        $y += 46
+        if ($bodyText) {
+            $sz = [System.Windows.Forms.TextRenderer]::MeasureText($bodyText, $MFont, (New-Object System.Drawing.Size($textW, 1000)), [System.Windows.Forms.TextFormatFlags]'WordBreak')
+            $bh = [math]::Min(62, [math]::Max(20, $sz.Height + 2))
+            $body = New-UiLabel $bodyText $MFont $dim $textX $y $textW $bh
+            $body.AutoEllipsis = $true
+            $controls += $body
+            $closers += $body
+            $y += $bh
+        }
+        if (-not $single -and $it.AlertKey) {
+            # Bell per reminder: mute it (or stop "notify me too") without opening the window
+            $bell = New-DrBtn '' 'ghost' 'bell' ($W - 48) ($rowTop - 4) 32 32
+            $bell.Radius = 8
+            $bell.Tag = $it
+            $popTip.SetToolTip($bell, $(if ($it.AlertState -eq 'shout') { 'Stop notifying me about this one' } else { 'Mute this reminder' }))
+            $bell.Add_Click({
+                $script:pendingAlert = $this.Tag
+                $this.IconName = 'bell-off'
+                $this.Invalidate()
+                Invoke-Later { Switch-Alert $script:pendingAlert }
+            })
+            $controls += $bell
+        }
+        $y += 8
     }
-    $y += 12   # same space above the buttons as below them
     if ($items.Count -gt $shown) {
-        $more = New-Object System.Windows.Forms.Label
-        $more.Text = "+ $($items.Count - $shown) more (see the Schedule window)"
-        $more.ForeColor = 'White'
-        $more.Font = $UiFont
-        $more.SetBounds(20, $y, 420, 22)
+        $more = New-UiLabel "+ $($items.Count - $shown) more (open Desk Reminders to see them)" $MSmall $dim $textX $y ($W - $textX - 16) 20
         $controls += $more
         $closers += $more
-        $y += 26
+        $y += 24
     }
+    $y += 4
 
-    $btnX = 20
     $snoozeList = $script:snoozed   # closures below can't see $script: variables
-    foreach ($spec in @(@('Snooze 5 min', 5), @('Snooze 15 min', 15))) {
-        $sb = New-Object System.Windows.Forms.Button
-        $sb.Text = $spec[0]
+    $btnX = $textX
+    foreach ($spec in @(@('Snooze 5 min', 5, 112), @('15 min', 15, 76))) {
+        $sb = New-DrBtn $spec[0] 'outline' '' $btnX $y $spec[2] 32
+        $sb.Font = $MSmall
+        $sb.Radius = 16
         $sb.Tag = $spec[1]
-        $sb.FlatStyle = 'Flat'
-        $sb.ForeColor = 'White'
-        $sb.FlatAppearance.BorderColor = [System.Windows.Forms.ControlPaint]::Light($barColor)
-        $sb.Font = $SmallFont
-        $sb.SetBounds($btnX, $y, 110, 32)
         $sb.Add_Click({
             $later = (Get-Date).AddMinutes([int]$this.Tag)
             $copies = @($items | ForEach-Object { $c = $_.PSObject.Copy(); $c | Add-Member -NotePropertyName Snoozed -NotePropertyValue $true -Force; $c })
             [void]$snoozeList.Add(@{ At = $later; Items = $copies })
             $form.Close()
         }.GetNewClosure())
+        $popTip.SetToolTip($sb, "Show this again in $($spec[1]) minutes")
         $controls += $sb
-        $btnX += 116
+        $btnX += $spec[2] + 8
     }
-    $done = New-Object System.Windows.Forms.Button
-    $done.Text = 'Done'
-    $done.FlatStyle = 'Flat'
-    $done.ForeColor = 'White'
-    $done.FlatAppearance.BorderColor = [System.Drawing.Color]::White
-    $done.Font = $BoldFont
-    $done.SetBounds(350, $y, 90, 32)
+    $done = New-DrBtn 'Done' 'primary' '' ($W - 16 - 86) $y 86 32
+    $done.Font = $MSmallBold
+    $done.Radius = 16
+    $done.Accent = $mainColor
     $done.Add_Click({ $form.Close() }.GetNewClosure())
     $controls += $done
-    $form.Height = $y + 32 + 12
+    $y += 32 + 16
+
+    # A thin line along the bottom shows how long until it closes by itself
+    $track = New-Object System.Windows.Forms.Panel
+    $track.BackColor = New-Rgb 238 240 243
+    $track.SetBounds(0, $y, $W, 3)
+    $fill = New-Object System.Windows.Forms.Panel
+    $fill.BackColor = $mainColor
+    $fill.SetBounds(0, 0, $W, 3)
+    $track.Controls.Add($fill)
+    $controls += $track
+    $form.Height = $y + 3
 
     foreach ($ctl in $closers) { $ctl.Add_Click({ $form.Close() }.GetNewClosure()) }
     $form.Controls.AddRange([System.Windows.Forms.Control[]]$controls)
@@ -1140,10 +1973,28 @@ function Show-Reminder($items) {
     $yPos = if ($script:settings.Corner -like 'Top*') { $area.Top + 24 } else { $area.Bottom - $form.Height - 24 }
     $form.Location = New-Object System.Drawing.Point($x, $yPos)
 
+    # Rounded corners (Windows 11 adds its own border and shadow; elsewhere we draw a thin border)
+    if (-not [DrUi]::RoundWindow($form, 12)) {
+        $form.Add_Paint({
+            param($s, $e)
+            $e.Graphics.SmoothingMode = 'AntiAlias'
+            $p = [DrUi]::Round((New-Object System.Drawing.RectangleF(0, 0, ($s.Width - 1), ($s.Height - 1))), 12)
+            $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(205, 211, 219))
+            $e.Graphics.DrawPath($pen, $p)
+            $pen.Dispose(); $p.Dispose()
+        })
+    }
+
+    $lifeMs = $PopupSeconds * 1000 + [math]::Max(0, $shown - 1) * 5000
+    $clockW = [System.Diagnostics.Stopwatch]::StartNew()
     $life = New-Object System.Windows.Forms.Timer
-    $life.Interval = $PopupSeconds * 1000 + [math]::Max(0, $shown - 1) * 5000
-    $life.Add_Tick({ $life.Stop(); if (-not $form.IsDisposed) { $form.Close() } }.GetNewClosure())
-    $form.Add_FormClosed({ $life.Stop(); $life.Dispose() }.GetNewClosure())
+    $life.Interval = 40
+    $life.Add_Tick({
+        $left = 1 - $clockW.ElapsedMilliseconds / $lifeMs
+        if ($left -le 0) { $life.Stop(); if (-not $form.IsDisposed) { $form.Close() }; return }
+        $fill.Width = [int]($W * $left)
+    }.GetNewClosure())
+    $form.Add_FormClosed({ $life.Stop(); $life.Dispose(); $popTip.Dispose() }.GetNewClosure())
     $life.Start()
 
     $script:current = $form
@@ -1500,7 +2351,7 @@ function Set-DialogTargets([string]$selectFile) {
 }
 
 # Mode 'Add' or 'Edit'. In Edit mode $Entry is the selected reminder.
-function Show-ReminderDialog([string]$Mode = 'Add', $Entry = $null, [string]$TargetFile = '') {
+function Show-ReminderDialog([string]$Mode = 'Add', $Entry = $null, [string]$TargetFile = '', [int]$AtMinute = -1) {
     $row = $null; $editSrc = $null
     if ($Mode -eq 'Edit') {
         $editSrc = Get-Source $Entry.File
@@ -1540,6 +2391,8 @@ function Show-ReminderDialog([string]$Mode = 'Add', $Entry = $null, [string]$Tar
     $start = if ($day -eq (Get-Date).Date) {
         $n = (Get-Date).AddMinutes(5); $n.Date.AddHours($n.Hour).AddMinutes([math]::Ceiling($n.Minute / 5) * 5)
     } else { $day.Date.AddHours(9) }
+    # Double-clicked a time on the timeline: start there (to the nearest quarter of an hour)
+    if ($AtMinute -ge 0 -and -not $row) { $start = $day.Date.AddMinutes([math]::Min(1425, [math]::Round($AtMinute / 15) * 15)) }
 
     $c.Once = New-Object System.Windows.Forms.RadioButton
     $c.Once.Text = 'Once at'; $c.Once.Checked = $true
@@ -1686,13 +2539,13 @@ function Show-ReminderDialog([string]$Mode = 'Add', $Entry = $null, [string]$Tar
 
 function Get-SelectedEntry {
     $c = $script:swc
-    if (-not $c.List -or $c.List.SelectedItems.Count -eq 0 -or -not $c.List.SelectedItems[0].Tag) { return $null }
-    return $c.List.SelectedItems[0].Tag
+    if (-not $c.Timeline -or -not $c.Timeline.Selected) { return $null }
+    return $c.Timeline.Selected.Tag
 }
 
 function Edit-Selected {
     $e = Get-SelectedEntry
-    if (-not $e) { Show-Msg $script:sw 'Select a reminder in the list first.' 'Edit' | Out-Null; return }
+    if (-not $e) { Show-Msg $script:sw 'Click a reminder on the timeline first.' 'Edit' | Out-Null; return }
     if (-not $e.Editable) {
         Show-Msg $script:sw "'$($e.Title)' comes from '$($e.Source)', a shared schedule you imported. Only the person who made it can change it. You can hide it for yourself with Remove." 'Edit' | Out-Null
         return
@@ -1703,11 +2556,11 @@ function Edit-Selected {
 # --- Remove / hide ----------------------------------------------------------
 function Remove-Selected {
     $e = Get-SelectedEntry
-    if (-not $e) { Show-Msg $script:sw 'Select a reminder in the list first.' 'Remove' | Out-Null; return }
+    if (-not $e) { Show-Msg $script:sw 'Click a reminder on the timeline first.' 'Remove' | Out-Null; return }
     $dayText = $script:selDay.ToString('dddd d MMMM', $En)
 
     if (-not $e.Editable) {
-        $msg = "'$($e.Title)' at $($e.EventTime) comes from the shared schedule '$($e.Source)'.`n`nHide it only on $dayText, or every time? This only changes what you see; the shared file stays as it is. You can show them again: select the schedule on the left > Options."
+        $msg = "'$($e.Title)' at $($e.EventTime) comes from the shared schedule '$($e.Source)'.`n`nHide it only on $dayText, or every time? This only changes what you see; the shared file stays as it is. You can show them again: the ... button on the schedule (left) > Options."
         $ans = Ask-Choice 'Hide shared reminder' $msg @('Only this day', 'Every time', 'Cancel') $script:sw
         $before = @($script:settings.Hidden)
         if ($ans -eq 'Only this day') { $script:settings.Hidden += @{ Key = $e.Key; Date = $e.EventAt.ToString('yyyy-MM-dd') } }
@@ -1821,7 +2674,7 @@ function Import-SharedSchedule($owner) {
         }
         $script:settings.MyGroups[$fileName] = @($mine)
         $groupNote = if ($mine.Count -gt 0) { "`nYour groups: $($mine -join ', '). Events for other groups show greyed out and don't pop up." }
-                     else { "`nYou didn't pick a group, so only events for everyone pop up. Change it any time: select it on the left > Options." }
+                     else { "`nYou didn't pick a group, so only events for everyone pop up. Change it any time: the ... button on the schedule (left) > Options." }
     }
     Save-Settings
     Sync-Schedule -Force
@@ -2317,7 +3170,7 @@ function Complete-LinkCheck([string]$fileName, $result) {
         # New groups appeared and you haven't picked one yet
         if (@($content.Groups).Count -gt 0 -and @($script:settings.MyGroups[$fileName]).Count -eq 0 -and -not $entry.AskedGroups) {
             $entry.AskedGroups = $true; Save-Settings
-            $tray.ShowBalloonTip(8000, "'$($entry.Name)' has groups", 'Pick yours: select it in the Schedules list > Options.', 'Info')
+            $tray.ShowBalloonTip(8000, "'$($entry.Name)' has groups", 'Pick yours: the ... button on it in the Schedules list > Options.', 'Info')
         }
     } else {
         Refresh-ScheduleWindow
@@ -2907,43 +3760,21 @@ function Invoke-Later([scriptblock]$action) {
     $t.Start()
 }
 
+# A schedule in the side panel: switch (shared ones), colour, name and details; the ... button opens a menu
 function New-ScheduleCard($s, [bool]$selected) {
-    $col = To-Color $s.Color
-    $card = New-Object System.Windows.Forms.Panel
-    $card.Size = New-Object System.Drawing.Size(204, 58)
-    $card.Margin = New-Object System.Windows.Forms.Padding(6, 3, 4, 3)
-    $card.BackColor = if ($selected) { Get-Soft $col 0.86 } else { $script:P.Surface }
-    $card.Cursor = [System.Windows.Forms.Cursors]::Hand
-    $card.Tag = $s.FileName
-    $bar = New-Object System.Windows.Forms.Panel
-    $bar.SetBounds(0, 0, 6, 58)
-    $bar.BackColor = if ($s.Enabled) { $col } else { $script:P.Grey }
-    $x = 14
-    $parts = @()
-    if (-not $s.IsMine) {
-        $cb = New-Object System.Windows.Forms.CheckBox
-        $cb.SetBounds(14, 20, 18, 18)
-        $cb.Checked = [bool]$s.Enabled
-        $cb.Tag = $s.FileName
-        $cb.BackColor = $card.BackColor
-        $script:sideTip.SetToolTip($cb, 'On or off: pop-ups and the list')
-        $cb.Add_CheckedChanged({
-            if ($script:sideLoading) { return }
-            $others = @($script:settings.Disabled | Where-Object { $_ -ne $this.Tag })
-            $script:settings.Disabled = if ($this.Checked) { $others } else { $others + $this.Tag }
-            Save-Settings
-            Invoke-Later { Sync-Schedule -Force }
-        })
-        $card.Controls.Add($cb)
-        $x = 36
-    }
-    $name = New-Object System.Windows.Forms.Label
-    $name.Text = if ($s.IsMine) { Get-MineName } else { $s.Name }
-    $name.Font = $BoldFont
-    $name.ForeColor = if ($s.Enabled) { To-TextColor $col } else { $script:P.Faint }
-    $name.AutoEllipsis = $true
-    $name.SetBounds($x, 8, (198 - $x), 22)
+    $mid = [string][char]0x00B7
+    $r = New-Object DrSchedRow
+    $r.Size = New-Object System.Drawing.Size(268, 52)
+    $r.Margin = New-Object System.Windows.Forms.Padding(4, 0, 0, 4)
+    $r.Font = $MFont
+    $r.Accent = $UiAccent
+    $r.Dot = To-Color $s.Color
+    $r.IsOn = ($s.IsMine -or [bool]$s.Enabled)
+    $r.ShowToggle = -not $s.IsMine
+    $r.Selected = $selected
+    $r.Title = if ($s.IsMine) { Get-MineName } else { $s.Name }
     $count = @($s.Rows | Where-Object { $_.Colour -ne 'skip' }).Count
+    $parts = @()
     if ($s.IsMine) { $parts = @('Your reminders', "$count row(s)") }
     else {
         if (-not $s.Enabled) { $parts += 'Off' }
@@ -2953,59 +3784,52 @@ function New-ScheduleCard($s, [bool]$selected) {
         $parts += "$count event(s)"
         if (@($s.Groups).Count -gt 0) { $parts += $(if (@($s.MyGroups).Count -gt 0) { @($s.MyGroups) -join ', ' } else { 'no group picked' }) }
     }
-    $sub = New-Object System.Windows.Forms.Label
-    $sub.Text = $parts -join '  -  '
-    $sub.Font = $SmallFont
-    $sub.ForeColor = $script:P.Dim
-    $sub.AutoEllipsis = $true
-    $sub.SetBounds($x, 31, (198 - $x), 20)
-    $script:sideTip.SetToolTip($sub, $sub.Text)
-    $card.Controls.AddRange(@($bar, $name, $sub))
-    foreach ($ctl in @($card, $bar, $name, $sub)) {
-        $ctl.Tag = $s.FileName
-        $ctl.Add_Click({ $script:selSource = [string]$this.Tag; Refresh-Sidebar })
-        $ctl.Add_DoubleClick({ $script:selSource = [string]$this.Tag; Invoke-Later { Show-ScheduleOptions (Get-SideSource) $script:sw } })
-    }
-    return $card
+    $r.Sub = $parts -join "  $mid  "
+    $r.Tag = $s.FileName
+    $script:sideTip.SetToolTip($r, $(if ($s.IsMine) { $r.Sub } else { $r.Sub + "`nThe switch turns it on or off. Double-click for options." }))
+    $r.Add_RowAction({ Invoke-RowAction $this })
+    return $r
+}
+
+# Rows fill the panel, leaving room for the scroll bar when there is one
+function Set-RowWidths {
+    $c = $script:swc
+    if (-not $c.Cards) { return }
+    $rows = @($c.Cards.Controls | Where-Object { $_ -is [DrSchedRow] })
+    $need = ($rows.Count * 56) -gt $c.Cards.ClientSize.Height
+    $w = $c.Cards.Width - 8 - $(if ($need) { [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth } else { 0 })
+    foreach ($r in $rows) { if ($r.Width -ne $w) { $r.Width = $w } }
 }
 
 function Refresh-Sidebar {
     if (-not $script:sw -or $script:sw.IsDisposed) { return }
     $c = $script:swc
     if (-not (@($script:loaded.All | ForEach-Object { $_.FileName }) -contains $script:selSource)) { $script:selSource = 'schedule.csv' }
-    $sig = "name=$(Get-MineName);" + ($script:loaded.All | ForEach-Object { "$($_.FileName)=$($_.Name)=$($_.Color)=$($_.Enabled)=$(@($_.Rows).Count)=$(@($_.MyGroups) -join ',')=$($_.Owned)" }) -join ';'
+    $sig = "name=$(Get-MineName);" + ($script:loaded.All | ForEach-Object { "$($_.FileName)=$($_.Name)=$($_.Color)=$($_.Enabled)=$(@($_.Rows).Count)=$(@($_.MyGroups) -join ',')=$($_.Owned)=$((Get-LinkEntry $_.FileName).Error)" }) -join ';'
     if ($c.SideSig -ne $sig) {
         $c.SideSig = $sig
-        $script:sideLoading = $true
         $c.Cards.SuspendLayout()
         foreach ($old in @($c.Cards.Controls)) { $old.Dispose() }
         $c.Cards.Controls.Clear()
-        foreach ($s in $script:loaded.All) { $c.Cards.Controls.Add((New-ScheduleCard $s $false)) }
+        foreach ($s in $script:loaded.All) { $c.Cards.Controls.Add((New-ScheduleCard $s ($s.FileName -eq $script:selSource))) }
         if (@($script:loaded.All).Count -le 1) {
             $hint = New-Object System.Windows.Forms.Label
-            $hint.Text = "No shared schedules yet.`n`nImport one your guild or team shared with you, or make your own with '+ New shared schedule'."
-            $hint.ForeColor = $script:P.Faint
-            $hint.Font = $SmallFont
-            $hint.Size = New-Object System.Drawing.Size(200, 96)
-            $hint.Margin = New-Object System.Windows.Forms.Padding(12, 10, 4, 0)
+            $hint.Text = "No shared schedules yet.`n`nImport one your guild or team shared with you, or make your own with New shared schedule."
+            $hint.ForeColor = New-Rgb 107 115 128
+            $hint.Font = $MSmall
+            $hint.Size = New-Object System.Drawing.Size(250, 80)
+            $hint.Margin = New-Object System.Windows.Forms.Padding(10, 8, 4, 0)
             $c.Cards.Controls.Add($hint)
         }
         $c.Cards.ResumeLayout()
-        $script:sideLoading = $false
+        Set-RowWidths
     }
-    # Highlight the selected schedule (recolour only: the cards stay, so clicks are safe)
-    foreach ($card in @($c.Cards.Controls)) {
-        if (-not ($card -is [System.Windows.Forms.Panel])) { continue }
-        $src = $null
-        foreach ($s in $script:loaded.All) { if ($s.FileName -eq $card.Tag) { $src = $s } }
-        if (-not $src) { continue }
-        $back = if ($card.Tag -eq $script:selSource) { Get-Soft (To-Color $src.Color) 0.86 } else { $script:P.Surface }
-        $card.BackColor = $back
-        foreach ($ch in $card.Controls) { if ($ch -is [System.Windows.Forms.CheckBox]) { $ch.BackColor = $back } }
+    # Highlight the selected schedule (the rows stay, so clicks on them are safe)
+    foreach ($r in @($c.Cards.Controls)) {
+        if (-not ($r -is [DrSchedRow])) { continue }
+        $sel = ([string]$r.Tag -eq $script:selSource)
+        if ($r.Selected -ne $sel) { $r.Selected = $sel; $r.Invalidate() }
     }
-    $sel = Get-SideSource
-    $script:sideTip.SetToolTip($c.SideOptions, $(if ($sel.IsMine) { "Name, colour and quiet hours for $(Get-MineName)" } else { "Colour, your groups and quiet hours for $($sel.Name)" }))
-    $script:sideTip.SetToolTip($c.SideRemove, $(if ($sel.IsMine) { "Remove all reminders in $(Get-MineName) (you can undo it)" } else { "Remove $($sel.Name) from this PC" }))
 }
 
 # --- Templates: ready-made sets of reminders you can adjust ---------------------------
@@ -3013,7 +3837,7 @@ function Show-PacksDialog($owner, [switch]$Welcome) {
     $d = New-Dialog $(if ($Welcome) { 'Welcome to Desk Reminders' } else { 'Templates' }) 700 560
     $intro = New-Note '' 16 12 668 44
     $intro.ForeColor = [System.Drawing.SystemColors]::ControlText
-    $intro.Text = if ($Welcome) { "Pick a few ready-made reminders to start with and adjust them to how you like it. You can change or remove each one later in the list. More any time under Templates (top left)." }
+    $intro.Text = if ($Welcome) { "Pick a few ready-made reminders to start with and adjust them to how you like it. You can change or remove each one later on the timeline. More any time under Templates (top right)." }
                   else { "Ready-made reminders. Tick what you want, adjust the times, and they're added to your own schedule." }
     $base = (Get-Date).Date
     $ctl = @($intro)
@@ -3265,7 +4089,7 @@ function Show-SettingsDialog($owner) {
     $quietFrom = New-TimePicker 156 25 $base.AddMinutes($qf)
     $toLbl = New-Label 'to' 242 25 24
     $quietTo = New-TimePicker 270 25 $base.AddMinutes($qt)
-    $qNote = New-Note 'Each schedule can still be let through: select it in the Schedules list > Options. Missed pop-ups are not shown later.' 14 60 510 36
+    $qNote = New-Note 'Each schedule can still be let through: the ... button on it in the Schedules list > Options. Missed pop-ups are not shown later.' 14 60 510 36
     $gQuiet.Controls.AddRange(@($quietOn, $quietFrom, $toLbl, $quietTo, $qNote))
 
     # Pop-ups
@@ -3295,8 +4119,8 @@ function Show-SettingsDialog($owner) {
     $gWin = New-Object System.Windows.Forms.GroupBox; $gWin.Text = 'Windows'; $gWin.SetBounds(560, 8, 536, 170)
     $startup = New-Object System.Windows.Forms.CheckBox; $startup.Text = 'Start Desk Reminders when I log in to Windows'
     $startup.Checked = [bool](Test-StartupLink); $startup.SetBounds(14, 24, 500, 26)
-    $splashOn = New-Object System.Windows.Forms.CheckBox; $splashOn.Text = 'Show the welcome screen and open the schedule when it starts'
-    $splashOn.Checked = [bool]$st.ShowWelcome; $splashOn.SetBounds(14, 52, 510, 26)
+    $splashOn = New-Object System.Windows.Forms.CheckBox; $splashOn.Text = 'Also open the window when it starts with Windows (else just the tray)'
+    $splashOn.Checked = [bool]$st.OpenAtLogin; $splashOn.SetBounds(14, 52, 510, 26)
     $bk = New-Object System.Windows.Forms.Button; $bk.Text = 'Back up'; $bk.SetBounds(14, 90, 110, 32)
     $bk.Add_Click({ Backup-Reminders $this.FindForm() })
     $rs = New-Object System.Windows.Forms.Button; $rs.Text = 'Restore'; $rs.SetBounds(130, 90, 110, 32)
@@ -3335,7 +4159,7 @@ function Show-SettingsDialog($owner) {
         $st.Quiet = @{ On = $quietOn.Checked; From = $quietFrom.Value.ToString('HH:mm'); To = $quietTo.Value.ToString('HH:mm') }
         $st.Corner = $cornerValues[$corner.SelectedIndex]
         $st.Monitor = $screen.SelectedIndex
-        $st.ShowWelcome = [bool]$splashOn.Checked
+        $st.OpenAtLogin = [bool]$splashOn.Checked
         $st.CheckUpdates = [bool]$updOn.Checked
         Save-Settings
         if ($st.CheckUpdates) { Start-UpdateCheck }
@@ -3351,6 +4175,7 @@ function Show-SettingsDialog($owner) {
 }
 
 # --- Main window ------------------------------------------------------------
+# Left: month calendar and your schedules. Right: the chosen day as a timeline.
 function Set-WeekValues([datetime]$anyDay, [datetime]$select) {
     $dow = [int]$anyDay.DayOfWeek; if ($dow -eq 0) { $dow = 7 }
     $script:weekStart = $anyDay.Date.AddDays(1 - $dow)
@@ -3358,160 +4183,174 @@ function Set-WeekValues([datetime]$anyDay, [datetime]$select) {
 }
 
 function Set-Week([datetime]$anyDay, [datetime]$select) {
-    Set-WeekValues $anyDay $select
+    Set-WeekValues $select $select
     Refresh-ScheduleWindow
 }
+
+function Move-Day([int]$days) { $d = $script:selDay.AddDays($days); Set-Week $d $d }
 
 function Update-Banner {
     if (-not $script:sw -or $script:sw.IsDisposed) { return }
     $c = $script:swc
+    $mid = [string][char]0x00B7
+    $right = ''
     if ((Get-Date) -lt $script:pauseUntil) {
-        $c.Banner.BackColor = Get-Soft ([System.Drawing.Color]::DimGray) 0.85
-        $c.BannerBar.BackColor = [System.Drawing.Color]::DimGray
-        $c.BannerText.Text = 'Paused until ' + $script:pauseUntil.ToString('HH:mm') + '. Right-click the bell > Resume to continue.'
-        return
-    }
-    $n = Get-Next
-    if ($n) {
-        $col = To-Color $n.Colour
-        $c.Banner.BackColor = Get-Soft $col 0.86
-        $c.BannerBar.BackColor = $col
-        $what = if ($n.Kind -eq 'notice') { "Notice: $($n.Title) at $($n.EventTime)" } else { $n.Title }
-        $from = if ($n.IsMine) { Get-MineName } else { $n.Source }
-        $day = if ($n.At.Date -ne (Get-Date).Date) { 'tomorrow ' } else { '' }
-        $c.BannerText.Text = "Next up:  $day$($n.Time)   $what    ($(Format-Until $n.At), $from)"
+        $col = New-Rgb 107 115 128
+        $label = 'PAUSED'
+        $title = 'No pop-ups until ' + $script:pauseUntil.ToString('HH:mm')
+        $right = 'Right-click the bell in the tray > Resume'
+        $icon = 'bell-off'
     } else {
-        $c.Banner.BackColor = Get-Soft $Accent 0.9
-        $c.BannerBar.BackColor = $Accent
-        $c.BannerText.Text = 'Nothing coming up in the next 24 hours.'
+        $n = Get-Next
+        $icon = 'bell'
+        if ($n) {
+            $icon = Get-ReminderIcon $n
+            $col = To-Color $n.Colour
+            $label = "NEXT UP  $mid  " + (Format-Until $n.At).ToUpper()
+            $what = if ($n.Kind -eq 'notice') { "Heads-up: $($n.Title) at $($n.EventTime)" } else { $n.Title }
+            $day = if ($n.At.Date -ne (Get-Date).Date) { 'Tomorrow ' } else { '' }
+            $title = "$day$($n.Time)   $what"
+            $right = if ($n.IsMine) { Get-MineName } else { $n.Source + $(if (@($n.For).Count -gt 0) { "  $mid  " + (@($n.For) -join ', ') } else { '' }) }
+        } else {
+            $col = $UiAccent
+            $label = 'NEXT UP'
+            $title = 'Nothing coming up in the next 24 hours'
+        }
     }
+    $sig = "$label|$title|$right|$icon|$($col.ToArgb())"
+    if ($c.BannerSig -eq $sig) { return }
+    $c.BannerSig = $sig
+    $c.Banner.Color1 = $col
+    $c.Banner.IconName = $icon
+    $c.Banner.Label = $label
+    $c.Banner.Title = $title
+    $c.Banner.RightText = $right
+    $c.Banner.Invalidate()
+}
+
+# A small icon for a reminder, picked from its words (falls back to a bell)
+function Get-ReminderIcon($e) {
+    $t = (" $($e.Title) $($e.Text) ").ToLower()
+    $map = @(
+        @('drop',   @('water', 'drink', 'hydrat', 'glass', 'bottle')),
+        @('eye',    @('eye', 'screen', '20-20', '20 m', 'look away')),
+        @('food',   @('breakfast', 'lunch', 'dinner', 'meal', 'eat', 'food', 'cook', 'snack', 'supper')),
+        @('swords', @('raid', 'dungeon', 'boss', 'pvp', 'arena', 'guild', 'flask', 'mythic', 'battleground', 'quest')),
+        @('moon',   @('bed', 'sleep', 'night', 'wind down', 'screens off')),
+        @('move',   @('move', 'stretch', 'walk', 'stand', 'exercise', 'gym', 'posture', 'workout', 'run ')),
+        @('pill',   @('pill', 'medic', 'vitamin', 'tablet')),
+        @('cup',    @('coffee', 'tea ', 'break')),
+        @('calendar', @('meeting', 'call', 'appointment', 'standup', 'stand-up'))
+    )
+    foreach ($m in $map) { foreach ($w in $m[1]) { if ($t.Contains($w)) { return $m[0] } } }
+    return 'bell'
+}
+
+function Get-RelativeDay([datetime]$day) {
+    $diff = [int]($day - (Get-Date).Date).TotalDays
+    switch ($diff) {
+        0 { return 'Today' }
+        1 { return 'Tomorrow' }
+        -1 { return 'Yesterday' }
+    }
+    if ($diff -gt 0) { return "In $diff days" }
+    return "$(-$diff) days ago"
 }
 
 function Refresh-ScheduleWindow([switch]$Tick) {
     if (-not $script:sw -or $script:sw.IsDisposed) { return }
     $c = $script:swc
-    $today = (Get-Date).Date
-    $end = $script:weekStart.AddDays(6)
-    $c.Week.Text = $script:weekStart.ToString('d MMM', $En) + ' - ' + $end.ToString('d MMM yyyy', $En)
+    $now = Get-Date
+    $today = $now.Date
+    $day = $script:selDay
+    $isToday = ($day -eq $today)
+    $mid = [string][char]0x00B7
 
     Refresh-Sidebar
+    $c.Month.Today = $today
+    $c.Month.Selected = $day
+    if ($c.MonthDay -ne $day) { $c.MonthDay = $day; $c.Month.ShowMonth($day) }
+    $c.Month.Invalidate()
+
     $script:refreshError = $null
     try {
-        $all = @(Add-Alerts @(Get-Occurrences $script:loaded.All $script:weekStart $end $script:settings.Hidden))
-        $week = @($all | Where-Object { $_.Kind -eq 'event' })
+        $entries = @(Add-Alerts @(Get-Occurrences $script:loaded.All $day $day $script:settings.Hidden) | Where-Object { $_.Kind -eq 'event' -and $_.At.Date -eq $day })
     } catch {
-        $week = @()
+        $entries = @()
         $script:refreshError = $_.Exception.Message
     }
-    for ($i = 0; $i -lt 7; $i++) {
-        $d = $script:weekStart.AddDays($i)
-        $b = $c.Days[$i]
-        $b.Text = $d.ToString('ddd', $En) + "`n" + $d.ToString('d MMM', $En)
-        # Dots for the other days only: the selected day's reminders are in the list below
-        $b.Tag = @{ Index = $i; Dots = $(if ($d -eq $script:selDay) { @() } else { @($week | Where-Object { $_.At.Date -eq $d } | ForEach-Object { $_.Colour } | Select-Object -Unique) }) }
-        # (A flat button draws its border in the text colour unless told otherwise:
-        #  the selected day gets a blue border, so no thin white line around it)
-        if ($d -eq $script:selDay) {
-            $b.BackColor = $Accent; $b.ForeColor = [System.Drawing.Color]::White
-            $b.FlatAppearance.BorderColor = $Accent
-        } else {
-            $b.BackColor = $script:P.Raised; $b.ForeColor = $script:P.Text
-            $b.FlatAppearance.BorderColor = $script:P.Border
-        }
-        $b.Font = if ($d -eq $today) { $BoldFont } else { $UiFont }
-        $b.Invalidate()
-    }
-
-    # Today: what's already over is hidden (or greyed out when "Hide what's done" is off)
-    $now = Get-Date
-    $isToday = ($script:selDay -eq $today)
-    $entries = @($week | Where-Object { $_.At.Date -eq $script:selDay })
     $doneCount = 0
     if ($isToday) {
         $doneCount = @($entries | Where-Object { $_.At.AddMinutes(1) -le $now }).Count
         if ($script:settings.HidePast) { $entries = @($entries | Where-Object { $_.At.AddMinutes(1) -gt $now }) }
     }
+    $c.Heading.Text = $day.ToString('dddd d MMMM yyyy', $En)
+    $sub = Get-RelativeDay $day
+    $total = $entries.Count + $(if ($isToday -and $script:settings.HidePast) { $doneCount } else { 0 })
+    if ($isToday -and $total -gt 0) { $sub += "  $mid  $doneCount of $total done" }
+    elseif ($entries.Count -gt 0) { $sub += "  $mid  $($entries.Count) reminder$(if ($entries.Count -ne 1) { 's' })" }
+    $c.SubHeading.Text = $sub
+    # How much of today is done: a slim bar right after the text
+    $c.Progress.Visible = ($isToday -and $total -gt 0)
+    if ($c.Progress.Visible) {
+        $c.Progress.Value = $doneCount / $total
+        $tw = [System.Windows.Forms.TextRenderer]::MeasureText($sub, $c.SubHeading.Font).Width
+        $c.Progress.Left = $c.SubHeading.Left + $tw + 10
+        $c.Progress.Invalidate()
+    }
     $c.HidePast.Visible = $isToday
     $script:hidePastLoading = $true
     $c.HidePast.Checked = [bool]$script:settings.HidePast
     $script:hidePastLoading = $false
-    $c.Heading.Text = $script:selDay.ToString('dddd d MMMM yyyy', $En) + $(if ($isToday) { '  (today)' } else { '' }) +
-        $(if ($isToday -and $script:settings.HidePast -and $doneCount -gt 0) { "  -  $doneCount done and hidden" } else { '' })
     $script:listMinute = $now.ToString('yyyy-MM-dd HH:mm')
 
-    # Keep what you selected (and where you scrolled) when the list refreshes by itself
-    $keepSel = $null; $keepTop = $null
-    if ($c.List.SelectedItems.Count -gt 0 -and $c.List.SelectedItems[0].Tag) {
-        $t0 = $c.List.SelectedItems[0].Tag; $keepSel = "$($t0.File)|$($t0.Line)|$($t0.At)"
-    }
-    if ($Tick -and $c.List.TopItem -and $c.List.TopItem.Tag) {
-        $t1 = $c.List.TopItem.Tag; $keepTop = "$($t1.File)|$($t1.Line)|$($t1.At)"
-    }
-    $c.List.BeginUpdate()
-    $c.List.Items.Clear()
-    $grey = $script:P.Grey
-    $firstUpcoming = $null
+    # The timeline (keeps what you selected when it refreshes by itself)
+    $tl = $c.Timeline
+    $keep = if ($tl.Selected) { $tl.Selected.Key } else { '' }
+    $tl.Selected = $null
+    $tl.Items.Clear()
     foreach ($e in $entries) {
-        $isDone = $isToday -and ($e.At.AddMinutes(1) -le $now)
-        $col = if ($isDone) { $grey } else { To-TextColor (To-Color $e.Colour) }
-        $active = $e.AlertState -ne 'off'      # 'off' = another group's event you didn't ask for
-        $it = New-Object System.Windows.Forms.ListViewItem('')
-        $it.ImageKey = $e.AlertState
-        $it.ToolTipText = Get-AlertTip $e
-        $it.UseItemStyleForSubItems = $false
-        $tm = $it.SubItems.Add($e.Time)
-        $tm.ForeColor = if ($active) { $col } else { $grey }
-        $t = $it.SubItems.Add($e.Title)
-        $t.ForeColor = if ($active) { $col } else { $grey }
-        $t.Font = if ($e.AlertState -eq 'off') { $ItalicFont } elseif ($e.AlertState -eq 'muted') { $UiFont } else { $BoldFont }
-        $tx = $it.SubItems.Add($e.Text)
-        if (-not $active) { $tx.ForeColor = $grey }
-        $forText = if (@($e.For).Count -eq 0) { $(if ($e.IsMine) { '' } else { 'Everyone' }) }
+        $it = New-Object DrItem
+        $it.Minute = $e.At.Hour * 60 + $e.At.Minute
+        $it.Time = $e.Time
+        $it.Title = $e.Title
+        $parts = @($(if ($e.IsMine) { Get-MineName } elseif ($e.Owned) { "$($e.Source) (yours)" } else { $e.Source }))
+        if ($e.Text) { $parts += $e.Text }
+        if ($e.Notice -gt 0) { $parts += "heads-up $($e.Notice) min before" }
+        if (-not $e.IsMine -and $e.TzText) { $parts += $e.TzText }
+        $it.Line2 = $parts -join "  $mid  "
+        $it.Chip = if (@($e.For).Count -eq 0) { '' }
                    else { (@($e.For) -join ', ') + $(if ($e.ForMe) { '' } elseif ($e.AlertState -eq 'shout') { ' (you too)' } else { ' (not you)' }) }
-        $fs = $it.SubItems.Add($forText)
-        $fs.ForeColor = if ($active) { $script:P.Text } else { $grey }
-        $ns = $it.SubItems.Add($(if ($e.Notice -gt 0) { "$($e.Notice) min before" } else { '' }))
-        if (-not $active) { $ns.ForeColor = $grey }
-        $ss = $it.SubItems.Add($(if ($e.IsMine) { Get-MineName } elseif ($e.Owned) { "$($e.Source) (yours)" } else { $e.Source }))
-        $ss.ForeColor = if ($active) { $col } else { $grey }
-        $rep = if ($e.OneOff) { 'This day only' } else { "$($e.DaysText), $($e.TimeText)" }
-        if (-not $e.IsMine -and $e.TzText) { $rep += " ($($e.TzText))" }
-        $s = $it.SubItems.Add($rep)
-        $s.ForeColor = if ($isDone) { $grey } else { $script:P.Dim }
-        if ($isDone) {
-            foreach ($sub in $it.SubItems) { $sub.ForeColor = $grey }
-            $t.Font = $UiFont
-        }
+        $it.Color1 = To-Color $e.Colour
+        $it.Alert = $e.AlertState
+        $it.IconName = Get-ReminderIcon $e
+        $it.Done = $isToday -and ($e.At.AddMinutes(1) -le $now)
         $it.Tag = $e
-        [void]$c.List.Items.Add($it)
-        if (-not $isDone -and -not $firstUpcoming) { $firstUpcoming = $it }
+        $it.Key = "$($e.File)|$($e.Line)|$($e.At)"
+        [void]$tl.Items.Add($it)
+        if ($keep -and $it.Key -eq $keep) { $tl.Selected = $it }
     }
-    if ($entries.Count -eq 0) {
-        $it = New-Object System.Windows.Forms.ListViewItem('')
-        [void]$it.SubItems.Add('')
-        $msg = if (@($script:loaded.Mine.Rows).Count -eq 0 -and @($script:loaded.All).Count -le 1) { 'No reminders yet. Click Add reminder, or Templates (top left) to get started.' }
-               elseif ($isToday -and $doneCount -gt 0) { "Nothing left for today. Untick ""Hide what's done"" to see the $doneCount earlier one(s)." }
-               else { 'No reminders on this day' }
-        [void]$it.SubItems.Add($msg)
-        $it.ForeColor = $script:P.Faint
-        [void]$c.List.Items.Add($it)
+    $tl.NowMinute = if ($isToday) { $now.Hour * 60 + $now.Minute } else { -1 }
+    $nothingYet = (@($script:loaded.Mine.Rows).Count -eq 0 -and @($script:loaded.All).Count -le 1)
+    $c.StartTpl.Visible = $nothingYet; $c.StartNew.Visible = $nothingYet
+    $tl.Blank = $nothingYet
+    $tl.EmptyText = if ($nothingYet) { 'No reminders yet. Start with a few ready-made ones (water, breaks, meals, bedtime), or add your own.' }
+                    elseif ($isToday -and $doneCount -gt 0) { "Nothing left for today. Turn off ""Hide what's done"" to see the $doneCount earlier one(s)." }
+                    else { 'No reminders on this day. Double-click a time to add one.' }
+    $tl.Relayout()
+    if ($nothingYet) { $tl.AutoScrollPosition = New-Object System.Drawing.Point(0, 0) }
+    elseif ($script:tlScrolledDay -ne $day) {
+        # A new day: scroll to now (today), or to the first reminder, or to the morning
+        $script:tlScrolledDay = $day
+        $first = if ($isToday) { $now.Hour * 60 + $now.Minute - 60 }
+                 elseif ($entries.Count -gt 0) { ($entries[0].At.Hour * 60 + $entries[0].At.Minute) - 30 }
+                 else { 8 * 60 }
+        $tl.ScrollToMinute([math]::Max(0, $first))
     }
-    $c.List.EndUpdate()
-    $topItem = $null
-    foreach ($it in $c.List.Items) {
-        if (-not $it.Tag) { continue }
-        $k = "$($it.Tag.File)|$($it.Tag.Line)|$($it.Tag.At)"
-        if ($keepSel -and $k -eq $keepSel) { $it.Selected = $true }
-        if ($keepTop -and $k -eq $keepTop) { $topItem = $it }
-    }
-    try {
-        if ($topItem) { $c.List.TopItem = $topItem }
-        elseif (-not $Tick -and $firstUpcoming) { $firstUpcoming.EnsureVisible() }
-    } catch {}
 
     if ($script:refreshError) {
         $c.Status.ForeColor = $script:P.Error
-        $c.Status.Text = 'Could not show this week: ' + $script:refreshError
+        $c.Status.Text = 'Could not show this day: ' + $script:refreshError
     } elseif ($script:errors.Count -gt 0) {
         $c.Status.ForeColor = $script:P.Error
         $c.Status.Text = "$($script:errors.Count) row(s) have a problem and are ignored. First: " + $script:errors[0]
@@ -3521,9 +4360,7 @@ function Refresh-ScheduleWindow([switch]$Tick) {
     }
     $canUndo = [bool]$script:undo
     $c.Undo.Enabled = $canUndo
-    # The button stays short ("Undo"); the tooltip says what it undoes
-    $what = if ($canUndo) { "Undo $($script:undo.What)" } else { 'Undo' }
-    $c.UndoTip.SetToolTip($c.Undo, $(if ($canUndo) { "$what (Ctrl+Z)" } else { 'Nothing to undo' }))
+    $c.UndoTip.SetToolTip($c.Undo, $(if ($canUndo) { "Undo $($script:undo.What) (Ctrl+Z)" } else { 'Nothing to undo' }))
     Update-Banner
 }
 
@@ -3541,35 +4378,32 @@ function New-Btn([string]$text, [int]$x, [int]$y, [int]$w, [int]$h = 34) {
     return $b
 }
 
-# --- Date picker: a big, simple month calendar (no animation) -----------------
-function Update-DatePicker {
-    $p = $script:dp
-    $first = $p.Month
-    $p.Title.Text = $first.ToString('MMMM yyyy', $En)
-    $dow = [int]$first.DayOfWeek; if ($dow -eq 0) { $dow = 7 }
-    $start = $first.AddDays(1 - $dow)          # weeks start on Monday
-    $today = (Get-Date).Date
-    for ($i = 0; $i -lt 42; $i++) {
-        $d = $start.AddDays($i)
-        $b = $p.Days[$i]
-        $b.Text = [string]$d.Day
-        $b.Tag = $d
-        $inMonth = ($d.Month -eq $first.Month)
-        if ($d -eq $script:selDay) {
-            $b.BackColor = $Accent; $b.ForeColor = [System.Drawing.Color]::White
-            $b.FlatAppearance.BorderColor = $Accent; $b.FlatAppearance.BorderSize = 1
-            $b.Font = $BoldFont
-        } else {
-            $b.BackColor = $script:P.Surface
-            $b.ForeColor = if ($d -eq $today) { To-TextColor $Accent } elseif ($inMonth) { $script:P.DayText } else { $script:P.OtherMonth }
-            $b.FlatAppearance.BorderColor = To-TextColor $Accent
-            $b.FlatAppearance.BorderSize = $(if ($d -eq $today) { 2 } else { 0 })
-            $b.Font = if ($d -eq $today) { $BoldFont } else { $UiFont }
-        }
-    }
+# A rounded button for the main window: primary (blue), outline, ghost or soft
+function New-DrBtn([string]$text, [string]$kind, [string]$icon, [int]$x, [int]$y, [int]$w, [int]$h = 34) {
+    $b = New-Object DrButton
+    $b.Text = $text
+    $b.Kind = $kind
+    $b.IconName = $icon
+    $b.Accent = $UiAccent
+    $b.Font = if ($kind -eq 'primary') { $MBold } else { $MFont }
+    $b.SetBounds($x, $y, $w, $h)
+    return $b
 }
 
-# Understands a date typed by hand: 24-12-2026, 24/12/2026, 24.12.2026, 2026-12-24,
+function New-UiLabel([string]$text, $font, $color, [int]$x, [int]$y, [int]$w, [int]$h) {
+    $l = New-Object System.Windows.Forms.Label
+    $l.Text = $text
+    $l.Font = $font
+    $l.ForeColor = $color
+    $l.AutoSize = $false
+    $l.AutoEllipsis = $true
+    $l.UseMnemonic = $false
+    $l.SetBounds($x, $y, $w, $h)
+    return $l
+}
+
+# --- Go to a date typed by hand ---------------------------------------------------
+# Understands: 24-12-2026, 24/12/2026, 24.12.2026, 2026-12-24,
 # 24 dec 2026, 24 December, December 24, 24-12 ... (day first; no year = the next time it comes)
 function ConvertFrom-TypedDate([string]$text) {
     $t = ($text -replace '\s+', ' ' -replace ',', '').Trim()
@@ -3594,262 +4428,244 @@ function ConvertFrom-TypedDate([string]$text) {
 }
 
 function Invoke-TypedDate {
-    $p = $script:dp
-    $d = ConvertFrom-TypedDate $p.Typed.Text
+    $c = $script:swc
+    $d = ConvertFrom-TypedDate $c.Typed.Text
     if (-not $d) {
-        $p.TypedHint.Text = "Can't read that date. Try 24-12-2026 or 24 dec 2026."
-        $p.TypedHint.ForeColor = $script:P.Error
+        $c.TypedCard.Border = $script:P.Error
+        $c.TypedCard.Invalidate()
+        $c.Status.ForeColor = $script:P.Error
+        $c.Status.Text = "Can't read that date. Try 24-12-2026 or 24 dec 2026."
         return
     }
-    $p.Drop.Close()
+    $c.TypedCard.Border = New-Rgb 218 223 229
+    $c.TypedCard.Invalidate()
+    $c.Typed.Text = ''
     Set-Week $d $d
 }
 
-function Move-DatePicker([int]$months) {
-    $script:dp.Month = $script:dp.Month.AddMonths($months)
-    Update-DatePicker
+# --- Clicks on the timeline ----------------------------------------------------
+function Show-ItemMenu {
+    $e = Get-SelectedEntry
+    if (-not $e) { return }
+    $m = $script:swc.ItemMenu
+    $m.Items[0].Text = if ($e.Editable) { 'Edit' } else { 'Edit (shared, read-only)' }
+    $m.Items[0].Enabled = [bool]$e.Editable
+    $m.Items[1].Text = if ($e.Editable) { 'Remove' } else { 'Hide' }
+    $m.Items[3].Text = switch ($e.AlertState) { 'on' { 'Mute' } 'muted' { 'Unmute' } 'off' { 'Notify me too' } 'shout' { 'Stop notifying me' } }
+    $m.Show([System.Windows.Forms.Cursor]::Position)
 }
 
-function Show-DatePicker($anchor) {
-    if (-not $script:dp) {
-        $cell = 46; $pad = 12
-        $W = $pad * 2 + 7 * $cell
-        $panel = New-Object System.Windows.Forms.Panel
-        $panel.BackColor = $script:P.Surface
-        $panel.Size = New-Object System.Drawing.Size($W, 400)
-        $p = @{ Panel = $panel; Days = @() }
-
-        $back = New-Btn ([string][char]0x2039) $pad 10 40 36
-        $fwd = New-Btn ([string][char]0x203A) ($W - $pad - 40) 10 40 36
-        foreach ($nav in @($back, $fwd)) {
-            $nav.Font = New-Object System.Drawing.Font('Segoe UI', 16, [System.Drawing.FontStyle]::Bold)
-            $nav.FlatStyle = 'Flat'; $nav.FlatAppearance.BorderSize = 0
-            $nav.ForeColor = To-TextColor $Accent
-            $nav.BackColor = $script:P.Surface
-            $nav.FlatAppearance.MouseOverBackColor = $script:P.Hover
-            $nav.Cursor = [System.Windows.Forms.Cursors]::Hand
-        }
-        $back.Add_Click({ Move-DatePicker -1 })
-        $fwd.Add_Click({ Move-DatePicker 1 })
-        $p.Title = New-Object System.Windows.Forms.Label
-        $p.Title.Font = New-Object System.Drawing.Font('Segoe UI', 14, [System.Drawing.FontStyle]::Bold)
-        $p.Title.TextAlign = 'MiddleCenter'
-        $p.Title.SetBounds(($pad + 44), 10, ($W - 2 * $pad - 88), 36)
-        $panel.Controls.AddRange(@($back, $fwd, $p.Title))
-
-        $names = @('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
-        for ($i = 0; $i -lt 7; $i++) {
-            $l = New-Object System.Windows.Forms.Label
-            $l.Text = $names[$i]
-            $l.Font = $SmallBold
-            $l.ForeColor = $script:P.Faint
-            $l.TextAlign = 'MiddleCenter'
-            $l.SetBounds(($pad + $i * $cell), 54, $cell, 22)
-            $panel.Controls.Add($l)
-        }
-        for ($i = 0; $i -lt 42; $i++) {
-            $b = New-Object System.Windows.Forms.Button
-            $b.FlatStyle = 'Flat'
-            $b.FlatAppearance.MouseOverBackColor = $script:P.Hover
-            $b.SetBounds(($pad + ($i % 7) * $cell + 2), (80 + [math]::Floor($i / 7) * 42), ($cell - 4), 38)
-            $b.Cursor = [System.Windows.Forms.Cursors]::Hand
-            $b.Add_Click({
-                $d = [datetime]$this.Tag
-                $script:dp.Drop.Close()
-                Set-Week $d $d
-            })
-            $panel.Controls.Add($b)
-            $p.Days += $b
-        }
-        # Or type a date by hand
-        $p.TypedHint = New-Object System.Windows.Forms.Label
-        $p.TypedHint.Font = $SmallFont
-        $p.TypedHint.SetBounds($pad, 334, ($W - 2 * $pad), 18)
-        $p.Typed = New-Object System.Windows.Forms.TextBox
-        $p.Typed.Font = New-Object System.Drawing.Font('Segoe UI', 11)
-        $p.Typed.SetBounds($pad, 355, ($W - 2 * $pad - 80), 30)
-        $p.Typed.Add_KeyDown({
-            if ($_.KeyCode -eq 'Enter') { $_.SuppressKeyPress = $true; Invoke-TypedDate }
-        })
-        $go = New-Btn 'Go' ($W - $pad - 74) 353 74 32
-        $go.Font = $BoldFont
-        $go.Add_Click({ Invoke-TypedDate })
-        $panel.Controls.AddRange(@($p.TypedHint, $p.Typed, $go))
-        $panel.Height = 398
-        # The mouse wheel flips months too (whichever part of the calendar has focus)
-        foreach ($ctl in @($panel) + @($panel.Controls)) {
-            $ctl.Add_MouseWheel({ if ($_.Delta -gt 0) { Move-DatePicker -1 } else { Move-DatePicker 1 } })
-        }
-
-        Set-Theme $panel
-        $hostCtl = New-Object System.Windows.Forms.ToolStripControlHost($panel)
-        $hostCtl.Margin = New-Object System.Windows.Forms.Padding(0)
-        $hostCtl.Padding = New-Object System.Windows.Forms.Padding(0)
-        $drop = New-Object System.Windows.Forms.ToolStripDropDown
-        $drop.Padding = New-Object System.Windows.Forms.Padding(1)
-        $drop.DropShadowEnabled = $true
-        [void]$drop.Items.Add($hostCtl)
-        $drop.Add_Opened({ [void]$script:dp.Days[10].Focus() })
-        $p.Drop = $drop
-        $script:dp = $p
+function Invoke-TimelineAction($tl) {
+    switch ($tl.Action) {
+        'bell' { $script:pendingAlert = $tl.ActionItem.Tag; Invoke-Later { Switch-Alert $script:pendingAlert } }
+        'edit' { Invoke-Later { Edit-Selected } }
+        'menu' { Show-ItemMenu }
+        'emptymenu' { $script:pendingMinute = $tl.ActionMinute; $script:swc.EmptyMenu.Show([System.Windows.Forms.Cursor]::Position) }
+        'add' { $script:pendingMinute = $tl.ActionMinute; Invoke-Later { Add-ReminderHere $script:pendingMinute } }
     }
-    $script:dp.Month = New-Object DateTime($script:selDay.Year, $script:selDay.Month, 1)
-    $script:dp.Typed.Text = ''
-    $script:dp.TypedHint.Text = 'Or type a date, e.g. 24-12-2026 or 24 dec'
-    $script:dp.TypedHint.ForeColor = $script:P.Faint
-    Update-DatePicker
-    $script:dp.Drop.Show($anchor, 0, $anchor.Height)
+}
+
+# New reminder: in the schedule selected on the left (when you can add to it), at a time if given
+function Add-ReminderHere([int]$minute = -1) {
+    $t = Get-SideSource
+    $file = if ($t.IsMine -or $t.Owned) { $t.File } else { '' }
+    Show-ReminderDialog 'Add' -TargetFile $file -AtMinute $minute
+}
+
+# --- Schedules on the left -------------------------------------------------------
+function Invoke-RowAction($r) {
+    $file = [string]$r.Tag
+    switch ($r.Action) {
+        'toggle' {
+            $r.IsOn = -not $r.IsOn
+            $r.Invalidate()
+            $others = @($script:settings.Disabled | Where-Object { $_ -ne $file })
+            $script:settings.Disabled = if ($r.IsOn) { $others } else { $others + $file }
+            Save-Settings
+            Invoke-Later { Sync-Schedule -Force }
+        }
+        'select' { $script:selSource = $file; Refresh-Sidebar }
+        'open' { $script:selSource = $file; Invoke-Later { Show-ScheduleOptions (Get-SideSource) $script:sw } }
+        'menu' { $script:selSource = $file; Refresh-Sidebar; Show-ScheduleMenu $r }
+    }
+}
+
+function Show-ScheduleMenu($anchor) {
+    $s = Get-SideSource
+    $m = $script:swc.SchedMenu
+    foreach ($old in @($m.Items)) { $old.Dispose() }
+    $m.Items.Clear()
+    $o = New-MenuItem $m 'Options' { Invoke-Later { Show-ScheduleOptions (Get-SideSource) $script:sw } }
+    $o.Font = $MBold
+    $o.ToolTipText = if ($s.IsMine) { 'Name, colour, sound and quiet hours' } else { 'Colour, your groups, sound and quiet hours' }
+    if ($s.IsMine -or $s.Owned) {
+        [void](New-MenuItem $m 'New reminder here' { Invoke-Later { Add-ReminderHere } })
+    }
+    if (-not $s.IsMine) {
+        $x = New-MenuItem $m 'Export' $null
+        Add-ExportItems $x.DropDownItems $s
+    }
+    [void]$m.Items.Add('-')
+    [void](New-MenuItem $m $(if ($s.IsMine) { 'Remove all reminders' } else { 'Remove from this PC' }) {
+        Invoke-Later { $t = Get-SideSource; if ($t.IsMine) { Clear-MySchedule } else { Remove-SharedSchedule $t } }
+    })
+    $m.Show($anchor, (New-Object System.Drawing.Point(($anchor.Width - 34), ($anchor.Height - 8))))
 }
 
 function Open-ScheduleWindow {
     if ($script:sw -and -not $script:sw.IsDisposed) {
         if ($script:sw.WindowState -eq 'Minimized') { $script:sw.WindowState = 'Normal' }
-        $script:sw.Activate(); return
+        [DrUi]::ToFront($script:sw); return
     }
-    $W = 1130; $H = 700
+    $W = 1160; $H = 760
+    $topH = 60; $footH = 34; $sideW = 300
+    $line = New-Rgb 230 233 237
+    $text = New-Rgb 27 31 36
+    $dim = New-Rgb 91 100 112
+    $faint = New-Rgb 138 146 158
+    $sideBack = New-Rgb 247 248 250
+    $white = [System.Drawing.Color]::White
+
     $f = New-Object System.Windows.Forms.Form
     $f.Text = "Desk Reminders $AppVersion"
-    $f.Font = $UiFont
+    $f.Font = $MFont
+    $f.BackColor = $white
     $f.StartPosition = 'CenterScreen'
     $f.ClientSize = New-Object System.Drawing.Size($W, $H)
-    $f.MinimumSize = New-Object System.Drawing.Size(1000, 560)
+    $f.MinimumSize = New-Object System.Drawing.Size(980, 620)
+    $f.KeyPreview = $true
     if ($script:appIcon) { $f.Icon = $script:appIcon }
     $c = @{}
     $script:sideTip = New-Object System.Windows.Forms.ToolTip
+    $tip = $script:sideTip
 
-    # Menu bar: Settings and GitHub (everything online lives under GitHub)
-    $ms = New-Object System.Windows.Forms.MenuStrip
-    $ms.Font = $UiFont
-    [void](New-MenuItem $ms 'Settings' { Show-SettingsDialog $script:sw })
-    $mGh = New-MenuItem $ms 'GitHub' $null
-    [void](New-MenuItem $mGh 'Code and downloads' { Open-Url $RepoUrl })
-    [void](New-MenuItem $mGh 'How to use' { Open-Url "$RepoUrl#readme" })
-    [void](New-MenuItem $mGh 'Shared schedules and groups' { Open-Url "$RepoUrl/blob/main/docs/shared-schedules.md" })
-    [void](New-MenuItem $mGh 'Schedule file format' { Open-Url "$RepoUrl/blob/main/docs/schedule-format.md" })
-    [void](New-MenuItem $mGh 'Troubleshooting' { Open-Url "$RepoUrl/blob/main/docs/troubleshooting.md" })
-    [void]$mGh.DropDownItems.Add('-')
-    [void](New-MenuItem $mGh "What's new (releases)" { Open-Url "$RepoUrl/releases" })
-    [void](New-MenuItem $mGh 'Report a problem or idea' { Open-Url "$RepoUrl/issues/new/choose" })
-    foreach ($mi in $mGh.DropDownItems) { if ($mi -is [System.Windows.Forms.ToolStripMenuItem]) { $mi.ToolTipText = 'Opens in your browser' } }
+    # --- Top bar: name on the left, actions on the right ---
+    $top = New-Object System.Windows.Forms.Panel
+    $top.Size = New-Object System.Drawing.Size($W, $topH)
+    $top.BackColor = $white
+    $topLine = New-Object System.Windows.Forms.Panel
+    $topLine.Height = 1; $topLine.Dock = 'Bottom'; $topLine.BackColor = $line
+    $logo = New-Object System.Windows.Forms.PictureBox
+    $logo.SetBounds(20, 16, 28, 28)
+    $logo.SizeMode = 'Zoom'
+    try { $logo.Image = (New-Object System.Drawing.Icon($IconFile, 32, 32)).ToBitmap() } catch {}
+    $name = New-UiLabel 'Desk Reminders' $MHead $text 56 0 260 $topH
+    $name.TextAlign = 'MiddleLeft'
+    $bx = $W - 20
+    $newBtn = New-DrBtn 'New reminder' 'primary' 'plus' ($bx - 156) 13 156; $bx -= 164
+    $tplBtn = New-DrBtn 'Templates' 'outline' 'templates' ($bx - 124) 13 124; $bx -= 132
+    $ghBtn = New-DrBtn 'GitHub' 'ghost' 'code' ($bx - 100) 13 100; $bx -= 104
+    $setBtn = New-DrBtn '' 'ghost' 'gear' ($bx - 36) 13 36; $bx -= 40
+    $c.Undo = New-DrBtn '' 'ghost' 'undo' ($bx - 36) 13 36
+    foreach ($b in @($newBtn, $tplBtn, $ghBtn, $setBtn, $c.Undo)) { $b.Anchor = 'Top, Right' }
+    $newBtn.Add_Click({ Add-ReminderHere })
+    $tip.SetToolTip($newBtn, 'Add a reminder (to the schedule selected on the left, if it is yours)')
+    $tplBtn.Add_Click({ Show-PacksDialog $script:sw })
+    $tip.SetToolTip($tplBtn, 'Ready-made reminders you can adjust: water, moving, eye breaks, meals, bedtime')
+    $setBtn.Add_Click({ Show-SettingsDialog $script:sw })
+    $tip.SetToolTip($setBtn, 'Settings')
+    $c.Undo.Add_Click({ Invoke-Undo })
+    $c.UndoTip = $tip
+    # GitHub: everything online, in one small menu
+    $gh = New-Object System.Windows.Forms.ContextMenuStrip
+    $gh.Font = $MFont
+    [void](New-MenuItem $gh 'Code and downloads' { Open-Url $RepoUrl })
+    [void](New-MenuItem $gh 'How to use' { Open-Url "$RepoUrl#readme" })
+    [void](New-MenuItem $gh 'Shared schedules and groups' { Open-Url "$RepoUrl/blob/main/docs/shared-schedules.md" })
+    [void](New-MenuItem $gh 'Schedule file format' { Open-Url "$RepoUrl/blob/main/docs/schedule-format.md" })
+    [void](New-MenuItem $gh 'Troubleshooting' { Open-Url "$RepoUrl/blob/main/docs/troubleshooting.md" })
+    [void]$gh.Items.Add('-')
+    [void](New-MenuItem $gh "What's new (releases)" { Open-Url "$RepoUrl/releases" })
+    [void](New-MenuItem $gh 'Report a problem or idea' { Open-Url "$RepoUrl/issues/new/choose" })
+    foreach ($mi in $gh.Items) { if ($mi -is [System.Windows.Forms.ToolStripMenuItem]) { $mi.ToolTipText = 'Opens in your browser' } }
+    $c.GhMenu = $gh
+    $ghBtn.Add_Click({ $script:swc.GhMenu.Show($this, (New-Object System.Drawing.Point(0, ($this.Height + 2)))) })
+    $top.Controls.AddRange(@($topLine, $logo, $name, $c.Undo, $setBtn, $ghBtn, $tplBtn, $newBtn))
 
-    $top = 34
-    # Next-up banner, full width
-    $c.Banner = New-Object System.Windows.Forms.Panel
-    $c.Banner.SetBounds(12, $top, ($W - 24), 40)
-    $c.Banner.Anchor = 'Top, Left, Right'
-    $c.BannerBar = New-Object System.Windows.Forms.Panel
-    $c.BannerBar.SetBounds(0, 0, 6, 40)
-    $c.BannerText = New-Object System.Windows.Forms.Label
-    $c.BannerText.Font = $BoldFont
-    $c.BannerText.SetBounds(16, 0, ($W - 50), 40)
-    $c.BannerText.TextAlign = 'MiddleLeft'
-    $c.BannerText.AutoEllipsis = $true
-    $c.BannerText.Anchor = 'Top, Left, Right'
-    $c.Banner.Controls.AddRange(@($c.BannerBar, $c.BannerText))
-
-    # --- Left: Schedules panel (your own + shared) ---
-    $y0 = $top + 52
-    $footH = 34
-    $sideH = $H - $y0 - $footH - 12
+    # --- Left: month calendar, go to a date, schedules ---
+    $sideH = $H - $topH - $footH
     $side = New-Object System.Windows.Forms.Panel
-    $side.SetBounds(12, $y0, 236, $sideH)
-    $side.Anchor = 'Top, Bottom, Left'
-    $side.BackColor = $script:P.Surface
-    $side.BorderStyle = 'FixedSingle'
-    $sideTitle = New-Object System.Windows.Forms.Label
-    $sideTitle.Text = 'Schedules'
-    $sideTitle.Font = New-Object System.Drawing.Font('Segoe UI', 12, [System.Drawing.FontStyle]::Bold)
-    $sideTitle.SetBounds(10, 8, 108, 26)
-    $tpl = New-Btn 'Templates' 120 7 104 28
-    $tpl.Add_Click({ Show-PacksDialog $script:sw })
-    $script:sideTip.SetToolTip($tpl, 'Ready-made reminders you can adjust: water, moving, eye breaks, meals, bedtime')
-    $imp = New-Btn 'Import' 10 40 104 36
-    $imp.Font = $BoldFont
-    $imp.Add_Click({ Show-ImportMenu $this })
-    $script:sideTip.SetToolTip($imp, 'Add a schedule someone shared: a file, a link (stays up to date) or a file in a synced folder')
-    $exp = New-Btn 'Export' 120 40 104 36
-    $exp.Font = $BoldFont
-    $exp.Add_Click({ Export-SharedSchedule $this })
-    $script:sideTip.SetToolTip($exp, 'Share a schedule you made: as a file, kept up to date in a synced folder, or as a link')
+    $side.Size = New-Object System.Drawing.Size($sideW, $sideH)
+    $side.BackColor = $sideBack
+    $sideLine = New-Object System.Windows.Forms.Panel
+    $sideLine.Width = 1; $sideLine.Dock = 'Right'; $sideLine.BackColor = $line
+
+    $c.Month = New-Object DrMonth
+    $c.Month.Font = $MFont
+    $c.Month.Accent = $UiAccent
+    $c.Month.SetBounds(16, 12, 268, 268)
+    $c.Month.Add_DayPicked({ $d = $script:swc.Month.Picked; Set-Week $d $d })
+
+    $c.TypedCard = New-Object DrCard
+    $c.TypedCard.Radius = 8
+    $c.TypedCard.Border = New-Rgb 218 223 229
+    $c.TypedCard.SetBounds(16, 290, 268, 34)
+    $c.TypedCard.BackColor = $white
+    $cal = New-Object DrIconTile
+    $cal.IconName = 'calendar'; $cal.Color1 = $dim; $cal.Tile = $false
+    $cal.SetBounds(8, 5, 24, 24)
+    $c.Typed = New-Object System.Windows.Forms.TextBox
+    $c.Typed.BorderStyle = 'None'
+    $c.Typed.BackColor = $white
+    $c.Typed.Font = $MFont
+    $c.Typed.SetBounds(38, 8, 222, 20)
+    $c.Typed.Add_KeyDown({ if ($_.KeyCode -eq 'Enter') { $_.SuppressKeyPress = $true; Invoke-TypedDate } })
+    $c.Typed.Add_HandleCreated({ [DrUi]::Cue($this, 'Go to a date, e.g. 24 dec') })
+    $tip.SetToolTip($c.Typed, 'Type a date and press Enter, e.g. 24 dec, 24-12-2026 or 2026-12-24')
+    $c.TypedCard.Controls.AddRange(@($cal, $c.Typed))
+
+    $schedTitle = New-UiLabel 'Schedules' $MHeadSmall $text 18 340 200 24
     $c.Cards = New-Object System.Windows.Forms.FlowLayoutPanel
-    $c.Cards.SetBounds(0, 84, 234, ($sideH - 84 - 96))
+    $c.Cards.SetBounds(12, 368, 280, ($sideH - 368 - 96))
     $c.Cards.Anchor = 'Top, Bottom, Left'
     $c.Cards.FlowDirection = 'TopDown'
     $c.Cards.WrapContents = $false
     $c.Cards.AutoScroll = $true
-    $sep = New-Object System.Windows.Forms.Panel
-    $sep.SetBounds(10, ($sideH - 92), 214, 1)
-    $sep.BackColor = $script:P.Divider
-    $sep.Anchor = 'Bottom, Left'
-    $c.SideOptions = New-Btn 'Options' 10 ($sideH - 84) 104 32
-    $c.SideOptions.Anchor = 'Bottom, Left'
-    $c.SideOptions.Add_Click({ Show-ScheduleOptions (Get-SideSource) $script:sw })
-    $c.SideRemove = New-Btn 'Remove' 120 ($sideH - 84) 104 32
-    $c.SideRemove.Anchor = 'Bottom, Left'
-    $c.SideRemove.Add_Click({
-        $s = Get-SideSource
-        if ($s.IsMine) { Clear-MySchedule } else { Remove-SharedSchedule $s }
-    })
-    $newSh = New-Btn '+ New shared schedule' 10 ($sideH - 46) 214 32
-    $newSh.Anchor = 'Bottom, Left'
+    $c.Cards.BackColor = $sideBack
+    $c.Cards.Add_Resize({ Set-RowWidths })
+    $imp = New-DrBtn 'Import' 'outline' 'import' 16 ($sideH - 88) 130
+    $exp = New-DrBtn 'Export' 'outline' 'export' 154 ($sideH - 88) 130
+    $newSh = New-DrBtn 'New shared schedule' 'ghost' 'plus' 16 ($sideH - 48) 268
+    foreach ($b in @($imp, $exp, $newSh)) { $b.Anchor = 'Bottom, Left' }
+    $imp.Add_Click({ Show-ImportMenu $this })
+    $tip.SetToolTip($imp, 'Add a schedule someone shared: a file, a link (stays up to date) or a file in a synced folder')
+    $exp.Add_Click({ Export-SharedSchedule $this })
+    $tip.SetToolTip($exp, 'Share a schedule you made: as a file, kept up to date in a synced folder, or as a link')
     $newSh.Add_Click({ $n = @(New-SharedSchedule $script:sw)[-1]; if ($n) { $script:selSource = [System.IO.Path]::GetFileName($n); Refresh-ScheduleWindow } })
-    $script:sideTip.SetToolTip($newSh, 'Make a schedule for your guild, team or community')
-    $side.Controls.AddRange(@($sideTitle, $tpl, $imp, $exp, $c.Cards, $sep, $c.SideOptions, $c.SideRemove, $newSh))
+    $tip.SetToolTip($newSh, 'Make a schedule for your guild, team or community')
+    $c.SchedMenu = New-Object System.Windows.Forms.ContextMenuStrip
+    $c.SchedMenu.Font = $MFont
+    $c.SchedMenu.ShowItemToolTips = $true
+    $side.Controls.AddRange(@($sideLine, $c.Month, $c.TypedCard, $schedTitle, $c.Cards, $imp, $exp, $newSh))
 
-    # --- Right: week and reminders ---
-    $x0 = 262
-    $cw = $W - $x0 - 12
-    $y = $y0
-    # Pick a date: our own big month calendar drops down; choosing a day jumps to its week
-    $prev = New-Btn ('Pick a date  ' + [char]0x25BE) $x0 $y 140 32
-    $prev.Font = $BoldFont
-    $prev.Add_Click({ Show-DatePicker $this })
-    $script:sideTip.SetToolTip($prev, 'Jump to any date, e.g. to plan something weeks ahead')
-    $c.Week = New-Object System.Windows.Forms.Label
-    $c.Week.Font = New-Object System.Drawing.Font('Segoe UI', 12, [System.Drawing.FontStyle]::Bold)
-    $c.Week.TextAlign = 'MiddleCenter'
-    $c.Week.SetBounds(($x0 + 146), $y, ($cw - 262), 32)
-    $c.Week.Anchor = 'Top, Left, Right'
-    $todayBtn = New-Btn 'Today' ($x0 + $cw - 110) $y 110 32
-    $todayBtn.Anchor = 'Top, Right'
+    # --- Right: the day ---
+    $mainW = $W - $sideW
+    $mainH = $sideH
+    $main = New-Object System.Windows.Forms.Panel
+    $main.Size = New-Object System.Drawing.Size($mainW, $mainH)
+    $main.BackColor = $white
+    $x0 = 28; $cw = $mainW - 56
+
+    $c.Heading = New-UiLabel '' $MTitle $text $x0 18 ($cw - 260) 36
+    $c.Heading.Anchor = 'Top, Left, Right'
+    $c.SubHeading = New-UiLabel '' $MFont $dim ($x0 + 1) 54 ($cw - 260) 22
+    $c.SubHeading.Anchor = 'Top, Left, Right'
+    $nx = $x0 + $cw
+    $fwd = New-DrBtn '' 'outline' 'right' ($nx - 36) 20 36
+    $todayBtn = New-DrBtn 'Today' 'outline' '' ($nx - 36 - 6 - 76) 20 76
+    $back = New-DrBtn '' 'outline' 'left' ($nx - 36 - 6 - 76 - 6 - 36) 20 36
+    foreach ($b in @($back, $todayBtn, $fwd)) { $b.Anchor = 'Top, Right' }
+    $back.Add_Click({ Move-Day -1 })
+    $fwd.Add_Click({ Move-Day 1 })
     $todayBtn.Add_Click({ Set-Week (Get-Date) (Get-Date) })
-
-    $y += 42
-    $c.Days = @()
-    $dw = [int][math]::Floor(($cw - 36) / 7)
-    for ($i = 0; $i -lt 7; $i++) {
-        $b = New-Object System.Windows.Forms.Button
-        $b.SetBounds(($x0 + $i * ($dw + 6)), $y, $dw, 62)
-        $b.FlatStyle = 'Flat'
-        $b.TextAlign = 'TopCenter'
-        $b.Padding = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
-        $b.Tag = @{ Index = $i; Dots = @() }
-        $b.Add_Click({ $script:selDay = $script:weekStart.AddDays([int]$this.Tag.Index); Refresh-ScheduleWindow })
-        # Coloured dots: which schedules have something on that day
-        $b.Add_Paint({
-            param($s, $e)
-            $dots = @($s.Tag.Dots)
-            if ($dots.Count -eq 0) { return }
-            $e.Graphics.SmoothingMode = 'AntiAlias'
-            $n = [math]::Min($dots.Count, 6)
-            $x = [int](($s.Width - ($n * 12 - 4)) / 2)
-            for ($k = 0; $k -lt $n; $k++) {
-                $brush = New-Object System.Drawing.SolidBrush((To-Color $dots[$k]))
-                $e.Graphics.FillEllipse($brush, $x + $k * 12, $s.Height - 15, 8, 8)
-                $brush.Dispose()
-            }
-        })
-        $c.Days += $b
-    }
-
-    $y += 74
-    $c.Heading = New-Object System.Windows.Forms.Label
-    $c.Heading.Font = $BoldFont
-    $c.Heading.SetBounds($x0, $y, 600, 24)
-    $c.HidePast = New-Object System.Windows.Forms.CheckBox
+    $tip.SetToolTip($back, 'Previous day')
+    $tip.SetToolTip($fwd, 'Next day')
+    $c.HidePast = New-Object DrToggle
     $c.HidePast.Text = "Hide what's done"
-    $c.HidePast.ForeColor = $script:P.Dim
-    $c.HidePast.SetBounds(($x0 + $cw - 160), ($y - 2), 160, 26)
+    $c.HidePast.Font = $MSmall
+    $c.HidePast.ForeColor = $dim
+    $c.HidePast.Accent = $UiAccent
+    $c.HidePast.SetBounds(($nx - 166), 58, 166, 24)
     $c.HidePast.Anchor = 'Top, Right'
     $c.HidePast.Add_CheckedChanged({
         if ($script:hidePastLoading) { return }
@@ -3858,109 +4674,87 @@ function Open-ScheduleWindow {
         Refresh-ScheduleWindow
     })
 
-    $y += 28
-    $btnY = $H - $footH - 12 - 34
-    $c.List = New-Object System.Windows.Forms.ListView
-    $c.List.View = 'Details'
-    $c.List.FullRowSelect = $true
-    $c.List.MultiSelect = $false
-    $c.List.HideSelection = $false
-    $c.List.SetBounds($x0, $y, $cw, ($btnY - 30 - $y))
-    $c.List.Anchor = 'Top, Bottom, Left, Right'
-    [void]$c.List.Columns.Add('Alert', 48)
-    [void]$c.List.Columns.Add('Time', 58)
-    [void]$c.List.Columns.Add('Reminder', 145)
-    [void]$c.List.Columns.Add('Text', 165)
-    [void]$c.List.Columns.Add('For', 100)
-    [void]$c.List.Columns.Add('Notice', 90)
-    [void]$c.List.Columns.Add('Schedule', 125)
-    [void]$c.List.Columns.Add('Repeats', 125)
+    # Next up
+    $c.Banner = New-Object DrBanner
+    $c.Banner.Font = $MFont
+    $c.Banner.SetBounds($x0, 92, $cw, 72)
+    $c.Banner.Anchor = 'Top, Left, Right'
+    $c.Progress = New-Object DrProgress
+    $c.Progress.SetBounds(($x0 + 200), 62, 140, 10)
+    $c.Progress.From = $UiAccent
+    $c.Progress.Visible = $false
+
+    # The timeline, in a card with a thin border
+    $tlTop = 180
+    $tlH = $mainH - $tlTop - 44
+    $tlCard = New-Object DrCard
+    $tlCard.Radius = 14
+    $tlCard.SetBounds($x0, $tlTop, $cw, $tlH)
+    $tlCard.Anchor = 'Top, Bottom, Left, Right'
+    $c.Timeline = New-Object DrTimeline
+    $c.Timeline.Font = $MFont
+    $c.Timeline.Accent = $UiAccent
+    $c.Timeline.SetBounds(2, 8, ($cw - 4), ($tlH - 16))
+    $c.Timeline.Anchor = 'Top, Bottom, Left, Right'
     $icons = New-Object System.Windows.Forms.ImageList
     $icons.ImageSize = New-Object System.Drawing.Size(16, 16)
     $icons.ColorDepth = 'Depth32Bit'
     foreach ($k in @('on', 'muted', 'off', 'shout')) { $icons.Images.Add($k, (New-AlertIcon $k)) }
-    $c.List.SmallImageList = $icons
-    $c.List.ShowItemToolTips = $true
-    $c.List.Add_KeyDown({
-        if ($_.KeyCode -eq 'Delete') { Remove-Selected }
-        elseif ($_.Control -and $_.KeyCode -eq 'Z') { Invoke-Undo }
-    })
-    # A click on the bell or megaphone switches it
-    $c.List.Add_MouseClick({
-        $hit = $this.HitTest($_.Location)
-        if ($hit.Item -and $hit.Item.Tag -and $_.X -lt $this.Columns[0].Width) {
-            $script:pendingAlert = $hit.Item.Tag
-            Invoke-Later { Switch-Alert $script:pendingAlert }
-        }
-    })
-    $c.List.Add_DoubleClick({
-        if ($this.PointToClient([System.Windows.Forms.Cursor]::Position).X -lt $this.Columns[0].Width) { return }
-        Edit-Selected
-    })
+    $c.Timeline.Add_ItemAction({ Invoke-TimelineAction $this })
+    $tlCard.Controls.Add($c.Timeline)
+    # When there are no reminders at all: start here (instead of a window popping up)
+    $c.StartTpl = New-DrBtn 'Start from a template' 'soft' 'templates' 82 76 206 36
+    $c.StartNew = New-DrBtn 'New reminder' 'outline' 'plus' 296 76 150 36
+    $c.StartTpl.Add_Click({ Show-PacksDialog $script:sw })
+    $c.StartNew.Add_Click({ Add-ReminderHere })
+    foreach ($b in @($c.StartTpl, $c.StartNew)) { $b.Visible = $false; $c.Timeline.Controls.Add($b) }
+    # Right-click menus for the timeline
+    $c.ItemMenu = New-Object System.Windows.Forms.ContextMenuStrip
+    $c.ItemMenu.Font = $MFont
+    [void](New-MenuItem $c.ItemMenu 'Edit' { Invoke-Later { Edit-Selected } })
+    [void](New-MenuItem $c.ItemMenu 'Remove' { Invoke-Later { Remove-Selected } })
+    [void]$c.ItemMenu.Items.Add('-')
+    [void](New-MenuItem $c.ItemMenu 'Mute' { $script:pendingAlert = Get-SelectedEntry; Invoke-Later { if ($script:pendingAlert) { Switch-Alert $script:pendingAlert } } })
+    $c.EmptyMenu = New-Object System.Windows.Forms.ContextMenuStrip
+    $c.EmptyMenu.Font = $MFont
+    [void](New-MenuItem $c.EmptyMenu 'New reminder at this time' { Invoke-Later { Add-ReminderHere $script:pendingMinute } })
 
-    $c.Status = New-Object System.Windows.Forms.Label
-    $c.Status.SetBounds($x0, ($btnY - 26), ($cw - 430), 22)
+    # Status on the left, what the icons mean on the right
+    $legY = $mainH - 34
+    $c.Status = New-UiLabel '' $MSmall $dim $x0 $legY ($cw - 560) 24
+    $c.Status.TextAlign = 'MiddleLeft'
     $c.Status.Anchor = 'Bottom, Left, Right'
-    $c.Status.AutoEllipsis = $true
-
-    # Legend for the icons in front of each time
     $legend = New-Object System.Windows.Forms.Panel
-    $legend.SetBounds(($x0 + $cw - 426), ($btnY - 27), 426, 22)
+    $legend.SetBounds(($x0 + $cw - 556), $legY, 556, 24)
     $legend.Anchor = 'Bottom, Right'
+    $legend.BackColor = $white
     $lx = 0
     foreach ($spec in @(@('on', 'pops up'), @('muted', 'muted'), @('shout', 'you too'))) {
         $pic = New-Object System.Windows.Forms.PictureBox
         $pic.Image = $icons.Images[$spec[0]]
-        $pic.SetBounds($lx, 3, 16, 16)
-        $lbl = New-Object System.Windows.Forms.Label
-        $lbl.Text = $spec[1]
-        $lbl.Font = $SmallFont
-        $lbl.ForeColor = $script:P.Dim
-        $lbl.SetBounds(($lx + 18), 2, 62, 18)
+        $pic.SetBounds($lx, 4, 16, 16)
+        $lbl = New-UiLabel $spec[1] $MSmall $dim ($lx + 19) 0 60 24
+        $lbl.TextAlign = 'MiddleLeft'
         $legend.Controls.AddRange(@($pic, $lbl))
-        $lx += 84
+        $lx += 82
     }
-    $hintL = New-Object System.Windows.Forms.Label
-    $hintL.Text = '(click the icon to change)'
-    $hintL.Font = $SmallFont
-    $hintL.ForeColor = $script:P.Faint
-    $hintL.SetBounds($lx, 2, (426 - $lx), 18)
+    $hintL = New-UiLabel 'Double-click to edit, right-click for more' $MSmall $faint $lx 0 (556 - $lx) 24
+    $hintL.TextAlign = 'MiddleRight'
     $legend.Controls.Add($hintL)
+    $main.Controls.AddRange(@($c.Progress, $c.Heading, $c.SubHeading, $back, $todayBtn, $fwd, $c.HidePast, $c.Banner, $tlCard, $c.Status, $legend))
 
-    $bx = $x0
-    $btns = @()
-    foreach ($spec in @(@('Add reminder', 136), @('Edit', 80), @('Remove', 84), @('Undo', 84))) {
-        $b = New-Btn $spec[0] $bx $btnY $spec[1]
-        $b.Anchor = 'Bottom, Left'
-        $bx += $spec[1] + 6
-        $btns += $b
-    }
-    $btns[0].Font = $BoldFont
-    $btns[0].Add_Click({
-        $t = Get-SideSource
-        if ($t.IsMine -or $t.Owned) { Show-ReminderDialog 'Add' -TargetFile $t.File } else { Show-ReminderDialog 'Add' }
-    })
-    $btns[1].Add_Click({ Edit-Selected })
-    $btns[2].Add_Click({ Remove-Selected })
-    $btns[3].Add_Click({ Invoke-Undo })
-    $c.Undo = $btns[3]
-    $c.UndoTip = New-Object System.Windows.Forms.ToolTip
-
-    # Footer
+    # --- Footer ---
     $foot = New-Object System.Windows.Forms.Panel
-    $foot.SetBounds(0, ($H - $footH), $W, $footH)
-    $foot.Dock = 'Bottom'
-    $foot.BackColor = $script:P.Footer
-    $hello = New-Object System.Windows.Forms.Label
-    $hello.Text = $Greeting
-    $hello.Font = $ItalicFont
-    $hello.ForeColor = $script:P.Dim
-    $hello.SetBounds(14, 0, 260, $footH)
+    $foot.Size = New-Object System.Drawing.Size($W, $footH)
+    $foot.BackColor = $sideBack
+    $footLine = New-Object System.Windows.Forms.Panel
+    $footLine.Height = 1; $footLine.Dock = 'Top'; $footLine.BackColor = $line
+    $hello = New-UiLabel $Greeting $ItalicFont $dim 18 0 260 $footH
     $hello.TextAlign = 'MiddleLeft'
     # New version notice (only shown when there is one)
     $c.UpdateLink = New-Object System.Windows.Forms.LinkLabel
-    $c.UpdateLink.Font = $SmallBold
-    $c.UpdateLink.LinkColor = $(if ($script:Dark) { New-Rgb 120 210 140 } else { New-Rgb 30 120 60 })
+    $c.UpdateLink.Font = $MSmallBold
+    $c.UpdateLink.LinkColor = New-Rgb 30 120 60
     $c.UpdateLink.ActiveLinkColor = $c.UpdateLink.LinkColor
     $c.UpdateLink.LinkBehavior = 'HoverUnderline'
     $c.UpdateLink.TextAlign = 'MiddleCenter'
@@ -3968,137 +4762,51 @@ function Open-ScheduleWindow {
     $c.UpdateLink.Anchor = 'Top, Left, Right'
     $c.UpdateLink.Visible = $false
     $c.UpdateLink.Add_LinkClicked({ Open-Url "$RepoUrl/releases/latest" })
-    $free = New-Object System.Windows.Forms.Label
-    $free.Text = 'Free, open source and offline - only connects for updates and links you follow'
-    $free.Font = $SmallFont
-    $free.ForeColor = $script:P.Faint
-    $free.SetBounds(($W - 544), 0, 530, $footH)
+    $free = New-UiLabel 'Free, open source and offline - only connects for updates and links you follow' $MSmall $faint ($W - 548) 0 530 $footH
     $free.TextAlign = 'MiddleRight'
     $free.Anchor = 'Top, Right'
-    $foot.Controls.AddRange(@($hello, $c.UpdateLink, $free))
+    $foot.Controls.AddRange(@($footLine, $hello, $c.UpdateLink, $free))
 
-    $f.Controls.AddRange(@($c.Banner, $side, $prev, $c.Week, $todayBtn) + $c.Days + @($c.Heading, $c.HidePast, $c.List, $c.Status, $legend) + $btns + @($foot))
-    $f.Controls.Add($ms)
-    $f.MainMenuStrip = $ms
-    $f.Add_FormClosed({ $script:sw = $null; $script:swc = @{}; if ($script:dp) { $script:dp.Drop.Dispose(); $script:dp = $null } })
+    # Docking happens in reverse order: top bar and footer full width, then the side, then the rest
+    $main.Dock = 'Fill'; $side.Dock = 'Left'; $foot.Dock = 'Bottom'; $top.Dock = 'Top'
+    $f.Controls.AddRange(@($main, $side, $foot, $top))
+
+    # Keys: Delete removes the selected reminder, Ctrl+Z undoes, Ctrl+N adds
+    $f.Add_KeyDown({
+        if ($this.ActiveControl -is [System.Windows.Forms.TextBox]) { return }
+        if ($_.KeyCode -eq 'Delete' -and $script:swc.Timeline.Selected) { $_.Handled = $true; Remove-Selected }
+        elseif ($_.Control -and $_.KeyCode -eq 'Z') { $_.Handled = $true; Invoke-Undo }
+        elseif ($_.Control -and $_.KeyCode -eq 'N') { $_.Handled = $true; Add-ReminderHere }
+        elseif ($_.Alt -and $_.KeyCode -eq 'Left') { $_.Handled = $true; Move-Day -1 }
+        elseif ($_.Alt -and $_.KeyCode -eq 'Right') { $_.Handled = $true; Move-Day 1 }
+    })
+    $f.Add_FormClosed({ $script:sw = $null; $script:swc = @{}; $script:tlScrolledDay = $null })
 
     $script:sw = $f
     $script:swc = $c
     if (-not $script:selSource) { $script:selSource = 'schedule.csv' }
-    Set-Theme $f
+    $script:tlScrolledDay = $null
     Set-Week (Get-Date) (Get-Date)
     Update-UpdateNotice
-    $f.Show()
-    $f.Activate()
-}
-
-# --- Splash: a short animated welcome, then the main window --------------------
-function Start-AfterSplash {
-    Open-ScheduleWindow
-    $firstRun = (-not $script:settings.Welcomed) -and @($script:loaded.Mine.Rows).Count -eq 0 -and @($script:loaded.All).Count -le 1
-    if ($firstRun) { Show-PacksDialog $script:sw -Welcome }
-    elseif (-not $script:settings.Welcomed) { $script:settings.Welcomed = $true; Save-Settings }
-}
-
-function Show-Splash {
-    $W = 460; $H = 300
-    $f = New-Object System.Windows.Forms.Form
-    $f.FormBorderStyle = 'None'
-    $f.StartPosition = 'CenterScreen'
-    $f.ShowInTaskbar = $false
-    $f.TopMost = $true
-    $f.BackColor = $script:P.Surface
-    $f.ClientSize = New-Object System.Drawing.Size($W, $H)
+    # Fade in (a quarter of a second) and come to the front
     $f.Opacity = 0
-    if ($script:appIcon) { $f.Icon = $script:appIcon }
-
-    # Coloured top edge
-    $edge = New-Object System.Windows.Forms.Panel
-    $edge.SetBounds(0, 0, $W, 5)
-    $edge.BackColor = $Accent
-
-    # The bell rings: drawn rotated a little on every frame
-    $bell = New-Object System.Windows.Forms.PictureBox
-    $bell.SetBounds((($W - 96) / 2), 30, 96, 96)
-    try { $script:splashImg = (New-Object System.Drawing.Icon($IconFile, 64, 64)).ToBitmap() } catch { $script:splashImg = $null }
-    $bell.Add_Paint({
-        param($s, $e)
-        if (-not $script:splashImg) { return }
-        $g = $e.Graphics
-        $g.SmoothingMode = 'AntiAlias'
-        $g.InterpolationMode = 'HighQualityBicubic'
-        $g.TranslateTransform(48, 20)                # swing from the top of the bell
-        $g.RotateTransform([single]$script:splash.Angle)
-        $g.DrawImage($script:splashImg, -32, -12, 64, 64)
-    })
-
-    $title = New-Object System.Windows.Forms.Label
-    $title.Text = "Welcome to Desk Reminders $AppVersion"
-    $title.Font = New-Object System.Drawing.Font('Segoe UI', 16, [System.Drawing.FontStyle]::Bold)
-    $title.ForeColor = To-TextColor $Accent
-    $title.TextAlign = 'MiddleCenter'
-    $title.SetBounds(0, 134, $W, 40)
-
-    $hello = New-Object System.Windows.Forms.Label
-    $hello.Text = $Greeting
-    $hello.Font = $ItalicFont
-    $hello.ForeColor = $script:P.Dim
-    $hello.TextAlign = 'MiddleCenter'
-    $hello.SetBounds(0, 176, $W, 24)
-
-    # Progress line that fills up over 3 seconds
-    $track = New-Object System.Windows.Forms.Panel
-    $track.SetBounds(90, 222, ($W - 180), 4)
-    $track.BackColor = $script:P.Track
-    $fill = New-Object System.Windows.Forms.Panel
-    $fill.SetBounds(0, 0, 0, 4)
-    $fill.BackColor = $Accent
-    $track.Controls.Add($fill)
-
-    $foot = New-Object System.Windows.Forms.Label
-    $foot.Text = 'Free, open source and offline'
-    $foot.Font = $SmallFont
-    $foot.ForeColor = $script:P.Faint
-    $foot.BackColor = $script:P.Footer
-    $foot.TextAlign = 'MiddleCenter'
-    $foot.SetBounds(0, ($H - 40), $W, 40)
-
-    $f.Controls.AddRange(@($edge, $bell, $title, $hello, $track, $foot))
-    # A click skips the wait
-    foreach ($ctl in @($f, $bell, $title, $hello, $foot)) { $ctl.Add_Click({ if ($script:splash.Phase -lt 2) { $script:splash.Phase = 2; $script:splash.Out = Get-Date } }) }
-
-    $timer = New-Object System.Windows.Forms.Timer
-    $timer.Interval = 16
-    $script:splash = @{ Form = $f; Bell = $bell; Fill = $fill; Track = $track; Timer = $timer; Start = (Get-Date); Phase = 0; Out = $null; Angle = 0.0 }
-    $timer.Add_Tick({
-        $sp = $script:splash
-        $t = ((Get-Date) - $sp.Start).TotalSeconds
-        # Bell swings, settling down
-        $sp.Angle = 16 * [math]::Sin($t * 2 * [math]::PI * 2.2) * [math]::Exp(-1.6 * $t)
-        $sp.Bell.Invalidate()
-        # Progress (eased)
-        $p = [math]::Min(1, $t / 3.0)
-        $ease = 1 - [math]::Pow(1 - $p, 3)
-        $sp.Fill.Width = [int]($sp.Track.Width * $ease)
-        if ($sp.Phase -eq 0) {
-            $sp.Form.Opacity = [math]::Min(1, $t / 0.35)
-            if ($t -ge 3.0) { $sp.Phase = 2; $sp.Out = Get-Date }
-        }
-        if ($sp.Phase -eq 2) {
-            $o = 1 - ((Get-Date) - $sp.Out).TotalSeconds / 0.35
-            if ($o -le 0) {
-                $sp.Phase = 3
-                $sp.Timer.Stop()
-                $sp.Form.Close()
-                Start-AfterSplash
-                return
-            }
-            $sp.Form.Opacity = [math]::Min($sp.Form.Opacity, $o)
-        }
-    })
-    $f.Add_FormClosed({ $script:splash.Timer.Stop(); $script:splash.Timer.Dispose() })
     $f.Show()
-    $timer.Start()
+    [DrUi]::ToFront($f)
+    $script:fadeClock = [System.Diagnostics.Stopwatch]::StartNew()
+    $fade = New-Object System.Windows.Forms.Timer
+    $fade.Interval = 15
+    $fade.Add_Tick({
+        $w = $script:sw
+        $k = [math]::Min(1.0, $script:fadeClock.ElapsedMilliseconds / 250.0)
+        if (-not $w -or $w.IsDisposed) { $this.Stop(); $this.Dispose(); return }
+        $w.Opacity = 1 - [math]::Pow(1 - $k, 3)
+        if ($k -ge 1) { $w.Opacity = 1; $this.Stop(); $this.Dispose() }
+    })
+    $fade.Start()
+    # Scroll the timeline again now that it has its real size
+    $script:tlScrolledDay = $null
+    Refresh-ScheduleWindow
+    $c.Timeline.Focus() | Out-Null
 }
 
 # --- Tray menu --------------------------------------------------------------
@@ -4116,7 +4824,7 @@ $tray.Add_DoubleClick({ Open-ScheduleWindow })
         $not = if ($_.Notify) { '' } elseif ($_.AlertState -eq 'muted') { '   (muted)' } else { '   (other group)' }
         "$($_.Time)   $what$from$not"
     })
-    if ($lines.Count -eq 0) { $lines = @('No reminders today. Open Desk Reminders and click Add reminder.') }
+    if ($lines.Count -eq 0) { $lines = @('No reminders today. Open Desk Reminders and click New reminder.') }
     if ($script:errors.Count -gt 0) { $lines += @('', 'PROBLEMS (these rows are ignored):') + $script:errors }
     [System.Windows.Forms.MessageBox]::Show(($lines -join "`r`n"), "Today's reminders") | Out-Null
 })
@@ -4188,12 +4896,19 @@ Update-TrayText
 Start-LinkChecks -Force
 Start-UpdateCheck
 
-$firstRun = (-not $script:settings.Welcomed) -and @($script:loaded.Mine.Rows).Count -eq 0 -and @($script:loaded.All).Count -le 1
-if ($script:settings.ShowWelcome -or $firstRun) {
-    Show-Splash
+# Started it yourself: the window opens right away. Started with Windows: quietly in the tray
+# (unless Settings says to open the window then too).
+if (-not $Startup -or $script:settings.OpenAtLogin) {
+    Open-ScheduleWindow
 } else {
     $tray.ShowBalloonTip(5000, 'Desk Reminders is running', $tray.Text, 'Info')
 }
+
+# Started again while already running: the running one opens its window (see the top of the app)
+$showCheck = New-Object System.Windows.Forms.Timer
+$showCheck.Interval = 250
+$showCheck.Add_Tick({ if ($script:showEvent.WaitOne(0)) { Open-ScheduleWindow } })
+$showCheck.Start()
 
 [System.Windows.Forms.Application]::Run()
 $script:mutex.ReleaseMutex()

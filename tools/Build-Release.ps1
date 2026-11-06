@@ -27,6 +27,7 @@ $files = @(
 )
 foreach ($f in $files) { Copy-Item -LiteralPath (Join-Path $app $f) -Destination (Join-Path $stage 'DeskReminders') }
 Copy-Item -LiteralPath (Join-Path $app 'sounds') -Destination (Join-Path $stage 'DeskReminders\sounds') -Recurse
+Copy-Item -LiteralPath (Join-Path $app 'assets') -Destination (Join-Path $stage 'DeskReminders\assets') -Recurse
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $stage 'DeskReminders\LICENSE.txt')
 
 if (Test-Path $out) { Remove-Item $out -Force }
