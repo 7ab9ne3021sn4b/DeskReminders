@@ -5,6 +5,9 @@ DeskReminders/shared/
 DeskReminders/settings.json
 settings.json
 
+# A font you put in the app's fonts folder stays on your PC (fonts have their own licences)
+   DeskReminders/fonts/
+
 # Release builds
 dist/
 
